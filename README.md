@@ -165,7 +165,7 @@ Open-Meteo and Wikivoyage need no key.
 1. Create a project. **Save the database password** — it goes in
    `DATABASE_URL` and is not shown again.
 2. Run the migrations in order. In the dashboard: **SQL Editor → New query**,
-   then paste and run each of `supabase/migrations/0001…0007` in sequence.
+   then paste and run each of `supabase/migrations/0001…0008` in sequence.
    They are idempotent, so re-running is safe.
 3. Collect the credentials:
    - **Project Settings → Data API** → Project URL
@@ -188,14 +188,16 @@ Open-Meteo and Wikivoyage need no key.
 <details>
 <summary><b>Making yourself an admin</b></summary>
 
-Sign up through the app first, then in the Supabase SQL Editor:
+Sign up through the app first (the profile row is created on first signup),
+then in the Supabase SQL Editor:
 
 ```sql
-update public.profiles set app_role = 'admin' where email = 'you@example.com';
+select public.promote_to_admin('you@example.com');
 ```
 
-This must be done server-side by design — `app_role` is protected by a trigger
-so users cannot promote themselves.
+This must be done server-side by design: `app_role` is protected by a trigger,
+so an authenticated user cannot promote themselves even with a crafted request.
+Verified — see migration `0008`.
 </details>
 
 ### 4. Configure
@@ -242,7 +244,7 @@ Two processes. Start the backend first.
 ```bash
 # Terminal 1 — API
 cd backend
-uvicorn app.main:app --reload
+python run.py
 
 # Terminal 2 — UI
 cd frontend
@@ -261,7 +263,13 @@ look if something misbehaves.
 > you can explore `/docs`. Nothing persists across a restart, and
 > `/health/ready` will say so.
 
-> **Windows:** set `PYTHONIOENCODING=utf-8` before running tests, or non-Latin
+> **Windows — use `python run.py`, not `uvicorn` directly.** uvicorn selects
+> `ProactorEventLoop` on Windows, and psycopg's async mode cannot use it: every
+> database call fails and the app quietly falls back to in-memory stores while
+> `/health/ready` reports the database as unconfigured. `run.py` pins
+> `SelectorEventLoop`. Linux, macOS and the Docker image are unaffected.
+>
+> Also set `PYTHONIOENCODING=utf-8` before running tests, or non-Latin
 > assertions raise `UnicodeEncodeError` from the console encoder.
 
 ---

@@ -49,7 +49,7 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m pytest tests/ -q
 
 ./.venv/Scripts/python.exe -m ruff check app tests --fix
 ./.venv/Scripts/python.exe -m ruff format app tests
-./.venv/Scripts/python.exe -m uvicorn app.main:app --reload   # → localhost:8000/docs
+./.venv/Scripts/python.exe run.py    # → localhost:8000/docs  (NOT bare uvicorn on Windows)
 ```
 
 Tests need no network, no database and no API keys. Keep it that way — a
@@ -68,7 +68,7 @@ backend/app/
   rag/        corpus, chunking, index, retriever
   agent/      state, graph, runner, nodes/
   api/        deps + v1/routes/
-supabase/migrations/   0001–0007, applied in order
+supabase/migrations/   0001–0008, applied in order
 ```
 
 **The rule that keeps this honest:** `agent/` imports `tools/`; `tools/` never
@@ -134,5 +134,14 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
 
 ## Status
 
-Backend complete and tested (97 tests). Remaining: Next.js frontend
-(chat + admin) on Vercel, and the live deployment.
+Backend and frontend complete, 122 tests passing. Verified end-to-end against
+live Supabase, Groq, Gemini, Tavily, Geoapify and Wikivoyage: planning, dynamic
+tool selection, multi-hop RAG, memory extraction and cross-session recall,
+clarification, Japanese replies, and the admin trace all confirmed working.
+
+Live Supabase project: `nlwzlplylmgawangqdhm` (ap-southeast-1), 8 migrations
+applied, RLS verified (an authenticated user cannot escalate to admin and sees
+only their own rows).
+
+Remaining: push to GitHub, deploy to Render + Vercel, and rotate the API keys
+that were shared in chat.
