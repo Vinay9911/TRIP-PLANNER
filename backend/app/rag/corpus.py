@@ -154,10 +154,14 @@ def parse_sections(extract: str) -> list[tuple[str, str]]:
     if trailing:
         sections.append((current_heading, trailing))
 
+    # Stub sections - a heading with a fragment under it - carry no
+    # retrievable meaning and only dilute the index. The floor is set at
+    # roughly one short sentence; anything longer is kept, and `chunk_article`
+    # merges small pieces into their neighbours anyway.
     return [
         (heading, text)
         for heading, text in sections
-        if heading not in SKIPPED_SECTIONS and len(text) > 40
+        if heading not in SKIPPED_SECTIONS and len(text) >= 25
     ]
 
 

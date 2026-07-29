@@ -69,6 +69,7 @@ class FakeEmbeddingService:
     """
 
     def __init__(self, dimensions: int = 64) -> None:
+        """Initialise with a vector width matching the configured dimensions."""
         self.dimensions = dimensions
         self.call_count = 0
 

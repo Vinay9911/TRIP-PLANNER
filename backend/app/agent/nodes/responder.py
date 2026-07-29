@@ -264,26 +264,70 @@ def _no_findings_response(state: AgentState) -> AgentState:
     )
 
 
-# Specific, checkable claims: a proper noun followed by a venue-like word, or
-# a price. Deliberately narrow - the aim is to catch invented specifics, not
-# to police ordinary prose.
-_CLAIM_PATTERNS: Final[list[re.Pattern[str]]] = [
-    re.compile(
-        r"\b([A-Z][\w'-]+(?:\s+[A-Z][\w'-]+){0,3})\s+"
-        r"(Restaurant|Cafe|Café|Temple|Shrine|Museum|Gallery|Hotel|Hostel|Market|Park|Garden)\b"
-    ),
-    re.compile(r"\b(?:¥|\$|€|£)\s?\d[\d,.]*\b"),
-]
+# A named venue: a run of capitalised words followed by a venue noun.
+# Note the capture deliberately over-reaches - "Visit Kiyomizu Temple" yields
+# "Visit Kiyomizu" - which `_name_is_supported` compensates for by testing
+# progressively shorter suffixes.
+#
+# Both apostrophe forms are accepted because venue names arrive with either:
+# some sources use the ASCII apostrophe, others the typographic one (U+2019).
+# The latter is written as an escape rather than pasted literally, since the
+# two are visually identical in most editors and a future reader would have
+# no way to tell which is present.
+_APOSTROPHES = "'" + chr(0x2019)
+_VENUE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    rf"([A-Z][\w{_APOSTROPHES}-]+(?:\s+[A-Z][\w{_APOSTROPHES}-]+){{0,3}})\s+"
+    r"(Restaurant|Cafe|Café|Temple|Shrine|Museum|Gallery|Hotel|Hostel"
+    r"|Market|Park|Garden)\b"
+)
+
+# A price. No leading `\b`: a word boundary cannot exist between a space and a
+# currency symbol, since neither is a word character - an easy way to write a
+# pattern that silently never matches.
+_PRICE_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?:[¥$€£]|USD|JPY|EUR|GBP)\s?\d[\d,.]*")
+
+
+def _name_is_supported(name: str, haystack: str) -> bool:
+    """Whether any meaningful part of a venue name appears in the evidence.
+
+    The venue pattern greedily absorbs preceding capitalised words, so a
+    sentence beginning "Visit Kiyomizu Temple" captures "Visit Kiyomizu".
+    Testing the whole phrase would report a grounded venue as invented.
+
+    So progressively shorter *suffixes* are tested - "Visit Kiyomizu", then
+    "Kiyomizu" - and the name counts as supported if any of them appears.
+    Suffixes rather than prefixes because the distinctive part of a name sits
+    at its end, next to the venue noun.
+
+    Args:
+        name: The captured capitalised run.
+        haystack: Lower-cased findings to search.
+
+    Returns:
+        True if the name appears to be supported by the findings.
+    """
+    words = name.split()
+
+    for start in range(len(words)):
+        candidate = " ".join(words[start:]).lower().strip()
+        # Skip fragments too short to be distinctive; "the" matching anything
+        # would make the whole check useless.
+        if len(candidate) < 4:
+            continue
+        if candidate in haystack:
+            return True
+
+    return False
 
 
 def _find_ungrounded_claims(answer: str, findings: str) -> list[str]:
     """Find specific claims in the answer with no support in the findings.
 
     A heuristic, not a proof. It looks for named venues and prices in the
-    draft and checks whether the same string appears anywhere in the gathered
-    evidence. Its purpose is to surface a *rate* of unsupported specifics in
-    the admin dashboard - a run with several is worth a look - rather than to
-    verify any individual sentence.
+    draft and checks whether they appear in the gathered evidence. Its purpose
+    is to surface a *rate* of unsupported specifics for the admin dashboard -
+    a run with several is worth a look - rather than to verify any individual
+    sentence.
 
     Args:
         answer: The composed reply.
@@ -295,15 +339,15 @@ def _find_ungrounded_claims(answer: str, findings: str) -> list[str]:
     haystack = findings.lower()
     unsupported: list[str] = []
 
-    for pattern in _CLAIM_PATTERNS:
-        for match in pattern.finditer(answer):
-            claim = match.group(0).strip()
-            # Check the distinctive part - the proper noun - rather than the
-            # whole phrase, since the answer may reword the surrounding text.
-            probe = (match.group(1) if match.groups() else claim).strip().lower()
-            if len(probe) < 4:
-                continue
-            if probe not in haystack:
-                unsupported.append(claim)
+    for match in _VENUE_PATTERN.finditer(answer):
+        if not _name_is_supported(match.group(1), haystack):
+            unsupported.append(match.group(0).strip())
+
+    for match in _PRICE_PATTERN.finditer(answer):
+        price = match.group(0).strip()
+        # Compared with whitespace removed, since the findings may write
+        # "¥ 400" where the answer writes "¥400".
+        if price.replace(" ", "").lower() not in haystack.replace(" ", ""):
+            unsupported.append(price)
 
     return list(dict.fromkeys(unsupported))

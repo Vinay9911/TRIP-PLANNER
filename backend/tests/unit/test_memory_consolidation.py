@@ -313,8 +313,7 @@ def test_heuristic_gate_admits_facts_and_skips_noise(message, expected):
     ],
 )
 def test_heuristic_gate_admits_short_non_latin_statements(message):
-    """Regression: a flat character-count floor silently disabled extraction
-    for CJK and Arabic users.
+    """Regression: a flat character floor disabled extraction for CJK users.
 
     These are complete, durable statements of a dietary constraint, but each
     is shorter than the twelve-character minimum tuned for English. Applying
