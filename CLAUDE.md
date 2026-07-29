@@ -129,7 +129,8 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
 - `README.md` — setup, running, example requests, live URL
 - `ARCHITECTURE.md` — the technical document: design and rationale
 - `WORKFLOW.md` — plain-language request walkthrough for non-engineers
-- `docs/` — per-subsystem deep dives
+- `docs/TESTING.md` — runbook: how to start everything and verify each claim
+- `scripts/` — verify_setup.py, apply_migrations.py, smoke_test.py
 - Module docstrings carry the detailed reasoning; keep them current.
 
 ## Status

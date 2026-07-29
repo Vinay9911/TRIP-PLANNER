@@ -18,6 +18,7 @@ POST /api/v1/chat
 - **Interactive docs** — `/docs` (OpenAPI/Swagger, generated from the code)
 - **Technical document** — [ARCHITECTURE.md](ARCHITECTURE.md)
 - **Plain-language walkthrough** — [WORKFLOW.md](WORKFLOW.md)
+- **How to run and verify it yourself** — [docs/TESTING.md](docs/TESTING.md)
 
 ---
 
@@ -366,9 +367,28 @@ Errors share one envelope:
 
 ## Testing
 
+**[docs/TESTING.md](docs/TESTING.md) is the full runbook** — how to start
+everything, and a step-by-step recipe for verifying each claim in this README
+yourself.
+
+Three helper scripts:
+
+```bash
+# Check every credential and service with a real call
+python scripts/verify_setup.py
+
+# Apply the SQL migrations (alternative to pasting them into the SQL editor)
+python scripts/apply_migrations.py
+
+# End-to-end functional test against a running API
+python scripts/smoke_test.py --email you@example.com --password '...'
+```
+
+The unit suite:
+
 ```bash
 cd backend
-PYTHONIOENCODING=utf-8 pytest -q                     # 97 tests
+PYTHONIOENCODING=utf-8 pytest -q                     # 122 tests
 pytest --cov=app --cov-report=term-missing
 pytest tests/unit/test_memory_consolidation.py -v    # the memory pipeline
 ```
@@ -377,6 +397,8 @@ No network, no database, no API keys. Notable coverage:
 
 - **Memory** — the three similarity bands, contradiction supersession with
   audit trail, cross-user isolation, the CJK length-floor regression.
+- **Key rotation** — round-robin spread, rate-limited keys skipped, cooldown
+  expiry, broken-key detection, and that pool status never leaks a full key.
 - **Tools** — every failure mode degrades rather than raising; no tool schema
   leaks `user_id`; a scan asserting the forbidden keyword-routing pattern is
   absent.
