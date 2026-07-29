@@ -1,0 +1,67 @@
+name: CI
+
+# Runs on every push and pull request. The unit suite needs no network, no
+# database and no API keys, so CI is fast and cannot fail because a third
+# party had a bad afternoon.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # A new push supersedes an in-flight run on the same branch.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check app tests
+
+      - name: Format check
+        run: ruff format --check app tests
+
+      - name: Type check
+        run: mypy app
+        # Type checking is advisory for now: several LangChain surfaces are
+        # loosely typed and the noise would drown real findings. Failing the
+        # build on it would train people to ignore the build.
+        continue-on-error: true
+
+      - name: Test
+        # Excludes tests marked `integration`, which need live credentials.
+        run: pytest -m "not integration" --cov=app --cov-report=term-missing
+        env:
+          PYTHONIOENCODING: utf-8
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Catches a broken Dockerfile at PR time rather than at deploy time,
+      # when the only signal is a failed release.
+      - name: Build image
+        run: docker build -f backend/Dockerfile -t trip-planner-api:ci backend

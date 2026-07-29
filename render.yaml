@@ -1,0 +1,88 @@
+# Render blueprint - infrastructure as code for the API deployment.
+#
+# Committing this rather than clicking through the dashboard means the
+# deployment is reviewable, reproducible, and diffable. `render.yaml` can be
+# applied to a fresh Render account to recreate the service exactly.
+#
+# Secrets are declared with `sync: false`, which tells Render the variable
+# exists and must be supplied, without ever putting its value in the
+# repository. The dashboard prompts for each one on first deploy.
+
+services:
+  - type: web
+    name: trip-planner-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    region: singapore          # Closest region to the intended users.
+    plan: free
+
+    # Liveness only - deliberately touches no dependency, so a database blip
+    # cannot get a healthy instance restarted into a crash loop.
+    healthCheckPath: /health
+
+    # Free instances sleep after 15 minutes idle and cold-start in 30-60s.
+    # `.github/workflows/keep-warm.yml` pings this service every 10 minutes to
+    # avoid that, and also keeps the Supabase project from pausing after its
+    # 7-day inactivity timeout. On a paid plan both become unnecessary.
+    autoDeploy: true
+
+    envVars:
+      # -- Application ----------------------------------------------------
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: LOG_FORMAT
+        value: json             # One JSON object per line, for log search.
+      - key: WEB_CONCURRENCY
+        value: "1"              # 512 MB on the free plan; see the Dockerfile.
+      - key: CORS_ORIGINS
+        sync: false             # The deployed frontend origin.
+
+      # -- Secrets: supply these in the Render dashboard -------------------
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: GEOAPIFY_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWKS_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false             # Session pooler (5432), NOT the transaction
+                                # pooler (6543) - see .env.example.
+
+      # -- Behaviour -------------------------------------------------------
+      - key: LLM_PLANNER_MODEL
+        value: openai/gpt-oss-120b
+      - key: LLM_EXECUTOR_MODEL
+        value: llama-3.3-70b-versatile
+      - key: LLM_UTILITY_MODEL
+        value: llama-3.1-8b-instant
+      - key: FLIGHT_PROVIDER
+        value: mock
+      - key: HTTP_USER_AGENT
+        sync: false             # Wikimedia requires a real contact address.
+
+      # Tightened from the development defaults. A free instance shares CPU,
+      # so a long plan is more likely to hit the platform's request timeout
+      # than to produce a better itinerary.
+      - key: AGENT_MAX_PLAN_STEPS
+        value: "5"
+      - key: AGENT_MAX_REPLAN_CYCLES
+        value: "2"
+      - key: AGENT_STEP_TIMEOUT_SECONDS
+        value: "60"
+      - key: RAG_MAX_HOPS
+        value: "4"
+      - key: RATE_LIMIT_REQUESTS_PER_MINUTE
+        value: "8"

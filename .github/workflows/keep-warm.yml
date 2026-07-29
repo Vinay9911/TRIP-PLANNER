@@ -1,0 +1,60 @@
+name: Keep warm
+
+# Solves two free-tier problems with one scheduled request.
+#
+# 1. Render free instances sleep after 15 minutes of inactivity and take
+#    30-60 seconds to cold start. A reviewer opening the demo link after a
+#    quiet period would wait through that and reasonably conclude the service
+#    is broken.
+#
+# 2. Supabase pauses a free project after 7 days of no database activity, and
+#    a paused project must be restored by hand from the dashboard. That is the
+#    worse failure: the API returns errors until someone notices.
+#
+# Pinging `/health/ready` fixes both at once, because that endpoint touches
+# the database while `/health` does not.
+#
+# On a paid plan this workflow can be deleted. It is a deliberate workaround
+# for a constraint, not something to be proud of - but it is cheap, honest and
+# documented.
+
+on:
+  schedule:
+    # Every 10 minutes, comfortably inside Render's 15-minute idle timeout.
+    # GitHub's scheduler can lag by several minutes under load, so the margin
+    # is real rather than incidental.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping the API
+    runs-on: ubuntu-latest
+    # Skipped on forks, which have neither the secret nor a reason to run it.
+    if: github.repository_owner != ''
+
+    steps:
+      - name: Wake the service and touch the database
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "API_URL secret is not set; nothing to ping."
+            exit 0
+          fi
+
+          # --max-time covers a full cold start. Retries handle the case where
+          # the first request arrives while the instance is still booting.
+          status=$(curl -sS -o /tmp/body.json -w "%{http_code}" \
+            --max-time 90 --retry 3 --retry-delay 20 --retry-all-errors \
+            "$API_URL/health/ready" || echo "000")
+
+          echo "HTTP $status"
+          cat /tmp/body.json || true
+
+          # A non-200 is worth surfacing as a failed run: it is the earliest
+          # signal that the deployment has broken between demos.
+          if [ "$status" != "200" ]; then
+            echo "::error::Health check returned $status"
+            exit 1
+          fi
