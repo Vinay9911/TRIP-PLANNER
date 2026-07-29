@@ -25,6 +25,10 @@ distance, which is a trap worth closing at the source.
 **768 dimensions.** Google's own figures put 768 at roughly a quarter of the
 storage of 3072 for a 0.26% quality loss. On a 500 MB free-tier database with
 an HNSW index, that trade is not close.
+
+Like the LLM service, `GEMINI_API_KEY` accepts a comma-separated list and
+calls rotate across the pool, retrying immediately on a different key when
+one reports a quota failure.
 """
 
 from __future__ import annotations
@@ -34,18 +38,12 @@ import hashlib
 import math
 from collections import OrderedDict
 from enum import StrEnum
-from typing import Final
-
-from tenacity import (
-    AsyncRetrying,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential_jitter,
-)
+from typing import Any, Final
 
 from app.core.config import Settings, get_settings
-from app.core.errors import ConfigurationError, ExternalServiceError, RateLimitError
+from app.core.errors import ExternalServiceError, RateLimitError
 from app.core.logging import get_logger
+from app.services.keys import AllKeysExhausted, KeyPool, get_pool
 
 logger = get_logger(__name__)
 
@@ -104,7 +102,7 @@ class EmbeddingService:
         """
         self.settings = settings or get_settings()
         self.dimensions = self.settings.embedding_dimensions
-        self._client: object | None = None
+        self._clients: dict[str, Any] = {}
         # Small LRU keyed by (task, text hash). Retrieval queries repeat far
         # more than you would guess - "vegetarian restaurants" recurs across
         # sessions and users - and each cache hit is one request kept off a
@@ -115,23 +113,33 @@ class EmbeddingService:
 
     # -- Client -----------------------------------------------------------
 
-    def _get_client(self) -> object:
-        """Return the lazily-constructed Gemini client.
+    def _get_pool(self) -> KeyPool:
+        """Return the shared Gemini key pool.
 
         Raises:
-            ConfigurationError: If no API key is configured.
+            ConfigurationError: If no key is configured.
         """
-        if self._client is None:
-            api_key = self.settings.gemini_api_key.get_secret_value()
-            if not api_key:
-                raise ConfigurationError(
-                    "GEMINI_API_KEY is not set. Get a free key at "
-                    "https://aistudio.google.com/apikey and add it to your .env file."
-                )
+        return get_pool("gemini", self.settings.gemini_api_key.get_secret_value())
+
+    def _client_for(self, api_key: str) -> Any:
+        """Return the client bound to one key, creating it on first use.
+
+        Cached per key so that rotating does not rebuild an HTTP client and
+        redo TLS on every call.
+
+        Args:
+            api_key: The key to bind.
+
+        Returns:
+            A Gemini client.
+        """
+        client = self._clients.get(api_key)
+        if client is None:
             from google import genai
 
-            self._client = genai.Client(api_key=api_key)
-        return self._client
+            client = genai.Client(api_key=api_key)
+            self._clients[api_key] = client
+        return client
 
     # -- Cache ------------------------------------------------------------
 
@@ -249,7 +257,12 @@ class EmbeddingService:
         return [vector for vector in results if vector is not None]
 
     async def _call_provider(self, texts: list[str], task: EmbeddingTask) -> list[list[float]]:
-        """Send one batch to the provider, with retries.
+        """Send one batch to the provider, rotating keys on quota failures.
+
+        Mirrors the LLM service's policy, and for the same reason: a quota
+        belongs to the key, not to the service. A rate-limited key is rested
+        and the next one is tried immediately; only a non-quota failure earns a
+        backoff.
 
         Args:
             texts: A batch no larger than `MAX_BATCH_SIZE`.
@@ -259,58 +272,90 @@ class EmbeddingService:
             Normalised vectors, one per input.
 
         Raises:
+            AllKeysExhausted: If every key is cooling down.
             ExternalServiceError: If every attempt fails.
         """
         from google.genai import types
 
-        client = self._get_client()
+        pool = self._get_pool()
         config = types.EmbedContentConfig(
             task_type=task.value,
             output_dimensionality=self.dimensions,
         )
+        attempts = pool.size + 2
+        last_error: Exception | None = None
 
-        async for attempt in AsyncRetrying(
-            stop=stop_after_attempt(3),
-            wait=wait_exponential_jitter(initial=1.0, max=15.0),
-            retry=retry_if_exception_type((ExternalServiceError, RateLimitError)),
-            reraise=True,
-        ):
-            with attempt:
-                try:
-                    response = await client.aio.models.embed_content(  # type: ignore[attr-defined]
-                        model=self.settings.embedding_model,
-                        contents=list(texts),
-                        config=config,
-                    )
-                except Exception as exc:
-                    message = str(exc).lower()
-                    if "429" in message or "quota" in message or "rate" in message:
-                        raise RateLimitError(
-                            "The embedding provider rejected the request for exceeding a quota.",
-                            service="gemini-embeddings",
-                            details={"original": str(exc)[:300]},
-                        ) from exc
-                    raise ExternalServiceError(
-                        "The embedding provider could not complete the request.",
+        for attempt in range(1, attempts + 1):
+            try:
+                api_key = pool.acquire()
+            except AllKeysExhausted as exhausted:
+                last_error = exhausted
+                if attempt < attempts and exhausted.retry_after_seconds <= 20:
+                    await asyncio.sleep(exhausted.retry_after_seconds + 0.5)
+                    continue
+                raise
+
+            client = self._client_for(api_key)
+
+            try:
+                response = await client.aio.models.embed_content(
+                    model=self.settings.embedding_model,
+                    contents=list(texts),
+                    config=config,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Broad by necessity - the SDK raises its own hierarchy. The
+                # message is inspected to tell a quota failure (rotate) from a
+                # transport failure (back off).
+                message = str(exc).lower()
+                is_quota = any(
+                    marker in message
+                    for marker in ("429", "quota", "rate limit", "resource_exhausted")
+                )
+
+                if is_quota:
+                    pool.report_rate_limited(api_key, None)
+                    last_error = RateLimitError(
+                        "The embedding provider rejected the request for exceeding a quota.",
                         service="gemini-embeddings",
                         details={"original": str(exc)[:300]},
-                    ) from exc
-
-                embeddings = getattr(response, "embeddings", None) or []
-                if len(embeddings) != len(texts):
-                    raise ExternalServiceError(
-                        "The embedding provider returned a different number of vectors "
-                        f"than inputs ({len(embeddings)} for {len(texts)}).",
-                        service="gemini-embeddings",
-                        retryable=False,
                     )
+                    logger.info(
+                        "embeddings.key_rotated",
+                        attempt=attempt,
+                        keys_available=pool.available_count(),
+                    )
+                    continue
 
-                # Normalise here rather than at the call sites: see the module
-                # docstring. Doing it once at the boundary means every vector
-                # in the database is unit length by construction.
-                return [_normalise(list(item.values or [])) for item in embeddings]
+                pool.report_error(api_key)
+                last_error = ExternalServiceError(
+                    "The embedding provider could not complete the request.",
+                    service="gemini-embeddings",
+                    details={"original": str(exc)[:300]},
+                )
+                logger.warning("embeddings.attempt_failed", attempt=attempt, error=str(exc)[:200])
+                if attempt >= attempts:
+                    break
+                await asyncio.sleep(min(2.0 ** (attempt - 1), 8.0))
+                continue
 
-        raise ExternalServiceError(  # pragma: no cover - unreachable with reraise=True
+            embeddings = getattr(response, "embeddings", None) or []
+            if len(embeddings) != len(texts):
+                raise ExternalServiceError(
+                    "The embedding provider returned a different number of vectors "
+                    f"than inputs ({len(embeddings)} for {len(texts)}).",
+                    service="gemini-embeddings",
+                    retryable=False,
+                )
+
+            pool.report_success(api_key)
+
+            # Normalise here rather than at the call sites: see the module
+            # docstring. Doing it once at the boundary means every vector in
+            # the database is unit length by construction.
+            return [_normalise(list(item.values or [])) for item in embeddings]
+
+        raise last_error or ExternalServiceError(
             "Embedding retry loop exited without a result.", service="gemini-embeddings"
         )
 
@@ -336,4 +381,5 @@ class EmbeddingService:
             "dimensions": len(vector),
             "expected_dimensions": self.dimensions,
             "model": self.settings.embedding_model,
+            "keys": self._get_pool().status(),
         }

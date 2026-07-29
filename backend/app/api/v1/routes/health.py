@@ -79,6 +79,12 @@ async def readiness(
         "supabase_jwks": bool(settings.supabase_jwks_url),
     }
 
+    # Key-pool health. The most useful line in this response when the agent
+    # starts failing: it distinguishes "quota exhausted" from "broken".
+    from app.services.keys import all_pool_status
+
+    checks["key_pools"] = all_pool_status()
+
     checks["agent"] = {
         "runner": getattr(request.app.state, "runner", None) is not None,
         "memory": getattr(request.app.state, "memory_service", None) is not None,

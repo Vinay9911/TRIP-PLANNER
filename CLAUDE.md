@@ -93,6 +93,20 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
 - **Free tiers:** Render sleeps after 15 min, Supabase pauses after 7 days.
   `.github/workflows/keep-warm.yml` pings `/health/ready` every 10 min, which
   fixes both because that endpoint touches the database.
+- **Groq's real ceiling is TPM, not RPD.** Measured live: 12,000 tokens/min and
+  1,000 requests/day for `llama-3.3-70b-versatile`. A full run is ~30-50k
+  tokens, so runs fail on tokens long before requests. Add more keys to
+  `GROQ_API_KEY` (comma-separated) - each one adds 12,000 TPM. Do not "fix"
+  this by switching to the 8B model: it has *less* TPM (6,000).
+- **Windows dev needs `python run.py`, not bare `uvicorn`.** uvicorn hardcodes
+  `ProactorEventLoop` on Windows via a loop factory, and psycopg's async mode
+  cannot use it - every DB call fails and the app silently falls back to
+  in-memory stores. `run.py` pins `SelectorEventLoop`. Linux/Docker unaffected.
+- **Cast arguments to Postgres functions explicitly** (`%s::uuid`, `%s::int`,
+  `%s::real`). psycopg infers `smallint` from a small int and `double
+  precision` from a float, neither of which matches the `integer`/`real`
+  parameters the migrations declare - overload resolution then fails with a
+  bare "function does not exist" that reads like a missing migration.
 
 ## Conventions
 

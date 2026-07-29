@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     rate_limit_requests_per_minute: int = Field(default=10, ge=1)
 
     # -- LLM (Groq) -------------------------------------------------------
+    # Accepts ONE key or several comma-separated. Multiple keys are pooled
+    # and rotated, so a rate limit on one moves straight to the next rather
+    # than stalling the request. See app/services/keys.py.
     groq_api_key: SecretStr = SecretStr("")
     llm_planner_model: str = "openai/gpt-oss-120b"
     llm_executor_model: str = "llama-3.3-70b-versatile"
@@ -61,6 +64,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=60, ge=5)
 
     # -- Embeddings (Gemini) ----------------------------------------------
+    # Also accepts a comma-separated list, pooled the same way.
     gemini_api_key: SecretStr = SecretStr("")
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = Field(default=768, ge=128, le=3072)
@@ -168,6 +172,20 @@ class Settings(BaseSettings):
     def has_embeddings(self) -> bool:
         """True when an embeddings provider is configured."""
         return bool(self.gemini_api_key.get_secret_value())
+
+    @property
+    def groq_key_count(self) -> int:
+        """How many Groq keys are configured, for startup logging."""
+        from app.services.keys import parse_keys
+
+        return len(parse_keys(self.groq_api_key.get_secret_value()))
+
+    @property
+    def gemini_key_count(self) -> int:
+        """How many Gemini keys are configured, for startup logging."""
+        from app.services.keys import parse_keys
+
+        return len(parse_keys(self.gemini_api_key.get_secret_value()))
 
     def missing_production_secrets(self) -> list[str]:
         """Names of secrets that must be present before serving real traffic.

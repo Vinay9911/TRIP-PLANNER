@@ -32,7 +32,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.state import AgentState, PlanStep, StepResult
 from app.core.config import Settings, get_settings
-from app.core.errors import ExternalServiceError
+from app.core.errors import ExternalServiceError, RateLimitError
 from app.core.logging import get_logger
 from app.tools.base import ToolCallRecord
 from app.tools.registry import get_tools
@@ -100,28 +100,7 @@ async def executor_node(
     prompt = _build_step_prompt(state, step)
 
     try:
-        from langchain.agents import create_agent
-
-        from app.services.llm import ModelRole, get_model
-
-        agent = create_agent(
-            model=get_model(ModelRole.EXECUTOR, settings=cfg),
-            tools=get_tools(),
-            system_prompt=EXECUTOR_PROMPT,
-        )
-
-        # A per-step deadline, so one pathologically slow tool chain cannot
-        # consume the whole request. The remaining steps still run.
-        response = await asyncio.wait_for(
-            agent.ainvoke(
-                {"messages": [HumanMessage(content=prompt)]},
-                # Bounds the ReAct loop inside the step, independently of the
-                # outer plan budget. Two graph steps per tool round trip.
-                {"recursion_limit": cfg.agent_max_tool_calls_per_step * 2 + 4},
-            ),
-            timeout=cfg.agent_step_timeout_seconds,
-        )
-        output = _extract_output(response)
+        output = await _run_step_agent(prompt, cfg)
         succeeded, error = True, None
 
     except TimeoutError:
@@ -176,6 +155,98 @@ async def executor_node(
             )
         ],
         current_step_index=index + 1,
+    )
+
+
+def _seconds_until_a_key_frees(pool: object) -> float:
+    """How long until the pool has a usable key again.
+
+    Args:
+        pool: The key pool to inspect.
+
+    Returns:
+        Seconds until the soonest key becomes available, or 0 if one already is.
+    """
+    status = pool.status()  # type: ignore[attr-defined]
+    if status["available_keys"]:
+        return 0.0
+    return min(
+        (float(entry["cooldown_remaining_s"]) for entry in status["keys"]),
+        default=0.0,
+    )
+
+
+async def _run_step_agent(prompt: str, cfg: Settings) -> str:
+    """Run one step through a `create_agent` instance, rotating keys on 429.
+
+    `create_agent` owns its internal tool-calling loop and holds whichever key
+    the model was constructed with, so rotation cannot happen *inside* a call.
+    Instead a rate limit fails the whole step and it is retried with a fresh
+    model, which draws the next key from the pool.
+
+    Args:
+        prompt: The step instruction.
+        cfg: Application settings.
+
+    Returns:
+        The executor's textual findings.
+
+    Raises:
+        RateLimitError: If every key was exhausted.
+        ExternalServiceError: If the step failed for another reason.
+        TimeoutError: If the step exceeded its deadline.
+    """
+    from langchain.agents import create_agent
+
+    from app.services.llm import ModelRole, get_llm_pool, get_model
+
+    pool = get_llm_pool(cfg)
+    attempts = max(pool.size, 1) + 1
+
+    for attempt in range(1, attempts + 1):
+        # Every key cooling down. The binding Groq limit is per-minute, so a
+        # short wait usually restores one - much better than failing a step the
+        # rest of the plan depends on.
+        if pool.available_count() == 0:
+            wait = min(_seconds_until_a_key_frees(pool), 25.0)
+            if wait > 0 and attempt < attempts:
+                logger.info("agent.step_waiting_for_key", seconds=round(wait, 1))
+                await asyncio.sleep(wait + 0.5)
+
+        agent = create_agent(
+            model=get_model(ModelRole.EXECUTOR, settings=cfg),
+            tools=get_tools(),
+            system_prompt=EXECUTOR_PROMPT,
+        )
+
+        try:
+            # A per-step deadline, so one pathologically slow tool chain cannot
+            # consume the whole request. The remaining steps still run.
+            response = await asyncio.wait_for(
+                agent.ainvoke(
+                    {"messages": [HumanMessage(content=prompt)]},
+                    # Bounds the ReAct loop inside the step, independently of
+                    # the outer plan budget. Two graph steps per tool round trip.
+                    {"recursion_limit": cfg.agent_max_tool_calls_per_step * 2 + 2},
+                ),
+                timeout=cfg.agent_step_timeout_seconds,
+            )
+        except Exception as exc:
+            # Normalised so a quota failure can be told from anything else.
+            from app.services.llm import _classify_provider_error
+
+            if isinstance(exc, TimeoutError):
+                raise
+            error = _classify_provider_error(exc)
+            if isinstance(error, RateLimitError) and attempt < attempts:
+                logger.info("agent.step_key_rotated", attempt=attempt, of=attempts)
+                continue
+            raise error from exc
+
+        return _extract_output(response)
+
+    raise RateLimitError(
+        "Every API key was rate limited while executing this step.", service="groq"
     )
 
 

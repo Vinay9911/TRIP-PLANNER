@@ -29,6 +29,20 @@ why they are written in full sentences rather than error codes.
 Every invocation is also recorded through a context-local collector, so the
 agent can persist a complete tool-call trace without threading a recorder
 object through every call site.
+
+**Repeat calls within one run are served from a cache.** Models re-ask the
+same question with cosmetically different wording - observed in testing as six
+`search_travel_guide` calls for the same city inside a single step, each a full
+four-hop retrieval returning several kilobytes. They cannot return anything
+new, but they consume the tokens-per-minute allowance the rest of the run
+needs, and on a free tier that is what actually fails a request.
+
+Exact-argument caching does not stop that, precisely because the wording
+varies. So a tool may declare `cache_on=(...)`: the arguments that genuinely
+determine its result. `search_travel_guide` caches on destination and intent,
+because rephrasing the question does not change which city gets retrieved.
+Tools without `cache_on` fall back to matching all arguments. The cache lives
+for exactly one run.
 """
 
 from __future__ import annotations
@@ -145,6 +159,13 @@ class ToolCallRecord(BaseModel):
 # without a shared mutable list or an explicit parameter on every tool.
 _recorder: ContextVar[list[ToolCallRecord] | None] = ContextVar("tool_recorder", default=None)
 
+# Per-run memoisation of tool results, keyed by (tool name, arguments). Also
+# context-local, so one request's cache can never serve another's - which
+# matters because `recall_user_preferences` results are user-specific.
+_result_cache: ContextVar[dict[str, ToolResult] | None] = ContextVar(
+    "tool_result_cache", default=None
+)
+
 
 def start_recording() -> list[ToolCallRecord]:
     """Begin collecting tool-call records for the current context.
@@ -155,12 +176,52 @@ def start_recording() -> list[ToolCallRecord]:
     """
     records: list[ToolCallRecord] = []
     _recorder.set(records)
+    _result_cache.set({})
     return records
 
 
 def stop_recording() -> None:
-    """Stop collecting tool-call records for the current context."""
+    """Stop collecting tool-call records and discard the per-run result cache."""
     _recorder.set(None)
+    _result_cache.set(None)
+
+
+def _cache_key(
+    tool_name: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    cache_on: tuple[str, ...] | None = None,
+) -> str:
+    """Build a stable cache key from a tool call's name and arguments.
+
+    **Positional arguments are part of the key.** The model always calls
+    through the registry with keywords, but the tools are plain functions and
+    are called positionally elsewhere - in tests, and by other tools. Keying on
+    keywords alone made every positional call collide on the same key, so a
+    Delhi-to-Goa search returned the London-to-Sydney result.
+
+    Keywords are sorted so argument order cannot produce two keys for one call,
+    and serialisation falls back to `str` so an unserialisable argument
+    degrades to a cache miss rather than raising.
+
+    Args:
+        tool_name: The tool being called.
+        args: Its positional arguments.
+        kwargs: Its keyword arguments.
+        cache_on: Keyword-argument names that determine the result. When given,
+            only these are used, so cosmetic rewording of the others still
+            hits the cache.
+
+    Returns:
+        A cache key.
+    """
+    import json
+
+    try:
+        rendered = json.dumps({"a": list(args), "k": kwargs}, sort_keys=True, default=str)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        rendered = f"{args}:{sorted(kwargs.items())}"
+    return f"{tool_name}:{rendered}"
 
 
 def _record(record: ToolCallRecord) -> None:
@@ -194,6 +255,7 @@ def resilient_tool(
     *,
     source: str,
     unavailable_message: str,
+    cache_on: tuple[str, ...] | None = None,
 ) -> Callable[[Callable[P, Awaitable[ToolResult]]], Callable[P, Awaitable[ToolResult]]]:
     """Wrap a tool so upstream failures degrade instead of propagating.
 
@@ -205,6 +267,10 @@ def resilient_tool(
             dependency fails. Must state what is missing *and* what to do -
             see the module docstring for why a bare error string is not
             enough.
+        cache_on: Keyword-argument names that determine this tool's result.
+            Set it on expensive tools whose output does not change when the
+            model rewords a free-text argument. Omit to match on all
+            arguments.
 
     Returns:
         A decorator for an async function returning a `ToolResult`.
@@ -228,6 +294,24 @@ def resilient_tool(
             tool_name = func.__name__
             error_code: str | None = None
             error_message: str | None = None
+
+            cache = _result_cache.get()
+            key = _cache_key(tool_name, args, kwargs, cache_on) if cache is not None else ""
+
+            if cache is not None and key in cache:
+                cached_result = cache[key].model_copy(update={"cached": True})
+                logger.info("tool.cache_hit", tool=tool_name, source=source)
+                _record(
+                    ToolCallRecord(
+                        tool_name=tool_name,
+                        arguments={k: v for k, v in kwargs.items() if _is_recordable(v)},
+                        status=cached_result.status,
+                        source=source,
+                        latency_ms=0,
+                        result_summary="(served from this run's cache)",
+                    )
+                )
+                return cached_result
 
             try:
                 result = await func(*args, **kwargs)
@@ -282,6 +366,12 @@ def resilient_tool(
                     error_message=error_message,
                 )
             )
+
+            # Only successful results are cached. A degraded result should not
+            # pin an outage for the rest of the run - the dependency may
+            # recover, and the message already tells the model not to retry.
+            if cache is not None and result.status is ToolStatus.OK:
+                cache[key] = result
 
             logger.info(
                 "tool.completed",

@@ -144,6 +144,15 @@ def _row_to_memory(row: dict[str, Any]) -> StoredMemory:
 class PostgresMemoryStore:
     """pgvector-backed memory storage.
 
+    Every call into a stored function casts its arguments explicitly
+    (``%s::uuid``, ``%s::int``, ``%s::real``). That is not decoration: psycopg
+    infers Postgres types from the Python values, so a small `int` is sent as
+    `smallint` and a `float` as `double precision`. Neither matches the
+    `integer`/`real` parameters these functions declare, and overload
+    resolution then fails with a bare "function does not exist" - which reads
+    like a missing migration rather than a type mismatch. The casts pin the
+    signature so the right overload is found.
+
     Attributes:
         db: The connection pool wrapper.
     """
@@ -184,7 +193,10 @@ class PostgresMemoryStore:
                 """
                 select id::text, memory_type, subject, content, confidence,
                        mention_count, last_seen_at, similarity, salience, score
-                  from public.match_memories(%s, %s::vector, %s, %s, %s::public.memory_type[])
+                  from public.match_memories(
+                           %s::uuid, %s::vector, %s::int, %s::real,
+                           %s::public.memory_type[]
+                       )
                 """,
                 (user_id, query_embedding, top_k, min_similarity, type_values),
             )
@@ -264,7 +276,7 @@ class PostgresMemoryStore:
                 """
                 select id::text, memory_type, subject, content, confidence,
                        mention_count, similarity
-                  from public.find_similar_memories(%s, %s::vector, %s, %s)
+                  from public.find_similar_memories(%s::uuid, %s::vector, %s::text, %s::int)
                 """,
                 (user_id, embedding, subject, limit),
             )

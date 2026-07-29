@@ -111,6 +111,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.verifier = TokenVerifier(settings)
 
+    # Build the key pools eagerly. They would otherwise be created on the first
+    # call that needs them, which means `/health/ready` reports no pools until
+    # traffic arrives - exactly when an operator is most likely to be looking
+    # at it. Constructing them here also surfaces a missing key at startup
+    # rather than mid-run.
+    from app.services.keys import get_pool
+
+    for provider, raw in (
+        ("groq", settings.groq_api_key.get_secret_value()),
+        ("gemini", settings.gemini_api_key.get_secret_value()),
+    ):
+        try:
+            pool = get_pool(provider, raw)
+            logger.info("app.key_pool_ready", provider=provider, keys=pool.size)
+        except Exception:  # noqa: BLE001
+            logger.warning("app.key_pool_unavailable", provider=provider)
+
     # -- Database ---------------------------------------------------------
     from app.db.session import Database
 

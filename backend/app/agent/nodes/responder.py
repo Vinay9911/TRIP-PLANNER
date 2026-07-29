@@ -34,7 +34,7 @@ from app.agent.state import AgentState
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
-from app.services.llm import ModelRole, get_model, invoke_with_retry
+from app.services.llm import ModelRole, call_model
 
 logger = get_logger(__name__)
 
@@ -172,11 +172,8 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
         )
 
     try:
-        model = get_model(
-            ModelRole.EXECUTOR, settings=cfg, temperature=cfg.llm_responder_temperature
-        )
-        response = await invoke_with_retry(
-            model,
+        response = await call_model(
+            ModelRole.EXECUTOR,
             [
                 SystemMessage(
                     content=RESPONDER_PROMPT.format(
@@ -188,6 +185,8 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
                 HumanMessage(content="\n".join(context_lines)),
             ],
             purpose="compose_response",
+            settings=cfg,
+            temperature=cfg.llm_responder_temperature,
         )
         answer = str(response.content).strip()
 
@@ -263,26 +262,54 @@ def _language_instruction(language: str) -> str:
 def _no_findings_response(state: AgentState) -> AgentState:
     """Compose a reply for a run that gathered nothing usable.
 
+    The message distinguishes *why*. An earlier version blamed "travel data
+    sources" for every failure, which was actively misleading: the common cause
+    on a free tier is the language model's own per-minute token allowance, and
+    telling a user their data sources are down when the sources answered fine
+    sends them looking in the wrong place. Worse, it hides the one thing they
+    can act on - waiting a minute, or adding another API key.
+
     Args:
         state: Current graph state.
 
     Returns:
         A partial state update with an honest failure message.
     """
-    logger.warning("agent.no_findings", run_id=state.get("run_id"))
+    completed = state.get("completed_steps", [])
+    rate_limited = any(
+        result.error and "rate limit" in result.error.lower() for result in completed
+    )
+
+    logger.warning(
+        "agent.no_findings",
+        run_id=state.get("run_id"),
+        cause="rate_limit" if rate_limited else "tool_failures",
+        steps_attempted=len(completed),
+    )
 
     destination = state.get("destination")
-    where = f" about {destination}" if destination else ""
-    message = (
-        f"I ran into trouble gathering information{where} just now - the travel data "
-        "sources I rely on did not respond. Could you try again in a moment? If it keeps "
-        "happening, tell me what matters most for this trip and I will work from that."
-    )
+    where = f" for {destination}" if destination else ""
+
+    if rate_limited:
+        message = (
+            "I hit my request limit part-way through planning"
+            f"{where}, so I could not finish. Please try again in a minute - the "
+            "limit resets quickly."
+        )
+        stopped = "llm_rate_limited"
+    else:
+        message = (
+            f"I ran into trouble gathering information{where} just now - the travel "
+            "data sources I rely on did not respond. Could you try again in a moment? "
+            "If it keeps happening, tell me what matters most for this trip and I will "
+            "work from that."
+        )
+        stopped = "no_usable_findings"
 
     return AgentState(
         final_response=message,
         status="failed",
-        stopped_because="no_usable_findings",
+        stopped_because=stopped,
         messages=[AIMessage(content=message)],
     )
 

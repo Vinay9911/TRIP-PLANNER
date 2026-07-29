@@ -196,7 +196,7 @@ class PostgresRagIndex:
                 cursor = await conn.execute(
                     """
                     select id::text from public.documents
-                     where source = 'wikivoyage' and source_id = any(%s)
+                     where source = 'wikivoyage' and source_id = any(%s::text[])
                     """,
                     (document_titles,),
                 )
@@ -212,7 +212,9 @@ class PostgresRagIndex:
             cursor = await conn.execute(
                 """
                 select document_title, source_id, url, section, content, similarity
-                  from public.match_document_chunks(%s::vector, %s::uuid[], %s::text[], %s, %s)
+                  from public.match_document_chunks(
+                           %s::vector, %s::uuid[], %s::text[], %s::int, %s::real
+                       )
                 """,
                 (query_embedding, document_ids, sections, top_k, min_similarity),
             )

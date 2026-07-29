@@ -46,7 +46,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
-from app.services.llm import ModelRole, get_model, invoke_with_retry
+from app.services.llm import ModelRole, call_model
 
 logger = get_logger(__name__)
 
@@ -265,9 +265,11 @@ async def summarise_conversation(
     )
 
     try:
-        model = get_model(ModelRole.UTILITY, settings=cfg)
-        response: BaseMessage = await invoke_with_retry(
-            model, [HumanMessage(content=prompt)], purpose="summarise_conversation"
+        response: BaseMessage = await call_model(
+            ModelRole.UTILITY,
+            [HumanMessage(content=prompt)],
+            purpose="summarise_conversation",
+            settings=cfg,
         )
     except ExternalServiceError:
         logger.warning("conversation.summarisation_failed", exc_info=True)

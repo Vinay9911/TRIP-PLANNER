@@ -436,9 +436,23 @@ does not.
 - **The grounding check is a heuristic.** It flags named venues and prices
   absent from the retrieved evidence and logs them for the admin dashboard.
   It does not block the response, and it has false positives.
-- **Rate limits are real.** Groq's free tier is roughly 1,000 requests/day and
-  one turn costs 6–12. Model tiering stretches that; heavy demo traffic will
-  still exhaust it.
+- **Groq's free tier is limited by tokens-per-minute, not requests.** Measured
+  from the live API: `llama-3.3-70b-versatile` allows **12,000 TPM** and 1,000
+  requests/day per key. A full itinerary run costs ~30–50k tokens, because the
+  executor resends its tool schemas and accumulated findings on every ReAct
+  round trip. So the daily request budget is ample and the *per-minute token*
+  budget is what actually fails a request.
+
+  This is why `GROQ_API_KEY` takes a comma-separated list: **each key adds
+  another 12,000 TPM**, and the pool rotates across them. Two keys handles
+  single-user use with occasional stalls; four or more makes back-to-back runs
+  comfortable. (Checked the alternatives - `llama-3.1-8b-instant` has *less*
+  TPM at 6,000, and the `gpt-oss` models 8,000, so the 70B model is already the
+  most generous choice.)
+
+  When every key is momentarily spent, the agent says so plainly - "I hit my
+  request limit part-way through planning, try again in a minute" - rather than
+  blaming the travel data sources, which answered fine.
 - **Wikivoyage coverage is uneven.** Major cities have rich district articles;
   smaller destinations may have only one page, in which case hop 2 is skipped
   and `stopped_because` says so.

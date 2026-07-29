@@ -22,6 +22,21 @@ from app.tools.context import get_tool_context
 
 logger = get_logger(__name__)
 
+# How much retrieved text goes back to the model in one tool result.
+#
+# Sized against the LLM budget, not against how much was retrieved. A
+# four-hop retrieval routinely returns 15 passages of up to 2,000 characters;
+# handing all of that back is ~30 KB in a single tool message, which on Groq's
+# free tier exceeds the per-minute token allowance and fails the step with a
+# generic provider error - the retrieval having succeeded, which makes it a
+# confusing failure to diagnose.
+#
+# The passages are already ranked, so truncating keeps the best evidence and
+# discards the tail nobody would have read.
+MAX_PASSAGES_RETURNED: Final[int] = 6
+MAX_CHARS_PER_PASSAGE: Final[int] = 700
+MAX_TOTAL_CHARS: Final[int] = 4000
+
 GUIDE_UNAVAILABLE: Final[str] = (
     "The travel guide could not be reached. Use find_places for concrete venues and "
     "search_web for background instead, and tell the user your suggestions are less "
@@ -29,7 +44,14 @@ GUIDE_UNAVAILABLE: Final[str] = (
 )
 
 
-@resilient_tool(source="wikivoyage", unavailable_message=GUIDE_UNAVAILABLE)
+@resilient_tool(
+    source="wikivoyage",
+    unavailable_message=GUIDE_UNAVAILABLE,
+    # A four-hop retrieval is driven by the destination, not by how the
+    # question is phrased. Without this the model's rewordings each trigger
+    # a fresh ~9s retrieval and another few thousand tokens.
+    cache_on=("destination", "intent"),
+)
 async def search_travel_guide(
     destination: str,
     question: str,
@@ -95,23 +117,31 @@ async def search_travel_guide(
             ),
         )
 
-    passages = [
-        {
-            "source": chunk.citation,
-            "url": chunk.url,
-            "section": chunk.section,
-            "content": chunk.content,
-            "relevance": round(chunk.similarity, 3),
-        }
-        for chunk in result.chunks
-    ]
+    passages: list[dict[str, object]] = []
+    budget = MAX_TOTAL_CHARS
 
+    for chunk in result.chunks[:MAX_PASSAGES_RETURNED]:
+        text = chunk.content[:MAX_CHARS_PER_PASSAGE]
+        if len(text) > budget:
+            break
+        budget -= len(text)
+        passages.append(
+            {
+                "source": chunk.citation,
+                "url": chunk.url,
+                "section": chunk.section,
+                "content": text,
+                "relevance": round(chunk.similarity, 3),
+            }
+        )
+
+    # The trace is for the admin viewer, not for the model - keep it compact so
+    # it does not eat the context budget the passages need.
     trace = [
         {
             "hop": hop.number,
             "step": hop.name,
-            "query": hop.query,
-            "derived_from": hop.derived_from,
+            "query": hop.query[:120],
             "documents": hop.documents,
             "passages_found": hop.chunks_returned,
         }
@@ -130,8 +160,9 @@ async def search_travel_guide(
             "hops": trace,
         },
         message=(
-            f"{len(passages)} passages from {len(result.hops)} chained retrieval steps, "
-            f"covering {covered or 'the city article'}. "
+            f"{len(passages)} of {len(result.chunks)} passages (the most relevant), from "
+            f"{len(result.hops)} chained retrieval steps, covering "
+            f"{covered or 'the city article'}. "
             "Ground your recommendations in these passages and name the district for each "
             "suggestion. Content is from Wikivoyage (CC BY-SA) - if something is not "
             "covered here, say so rather than filling the gap from memory."
