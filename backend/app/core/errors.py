@@ -124,8 +124,9 @@ class ExternalServiceError(TripPlannerError):
             details: Structured context (status code, endpoint, ...).
             retryable: Overrides the default retryability.
         """
-        super().__init__(message, details={**(details or {}), "service": service},
-                         retryable=retryable)
+        super().__init__(
+            message, details={**(details or {}), "service": service}, retryable=retryable
+        )
         self.service = service
 
 

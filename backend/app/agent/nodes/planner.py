@@ -129,8 +129,9 @@ async def planner_node(state: AgentState, *, settings: Settings | None = None) -
                 description=f"Research and answer: {state.get('goal', 'the request')}",
                 kind="research",
             ),
-            PlanStep(description="Compose the final answer", kind="compose",
-                     depends_on_previous=True),
+            PlanStep(
+                description="Compose the final answer", kind="compose", depends_on_previous=True
+            ),
         ]
         return AgentState(
             plan=fallback,

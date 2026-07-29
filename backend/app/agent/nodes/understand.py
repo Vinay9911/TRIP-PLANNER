@@ -61,9 +61,7 @@ class Understanding(BaseModel):
             "weekend' or 'in March' against today's date. Null if genuinely unstated."
         ),
     )
-    end_date: str | None = Field(
-        default=None, description="Last day as YYYY-MM-DD, or null."
-    )
+    end_date: str | None = Field(default=None, description="Last day as YYYY-MM-DD, or null.")
     detected_language: str = Field(
         default="en",
         max_length=12,
@@ -171,9 +169,7 @@ async def understand_node(
         memory_block = memory_context.as_prompt_block()
         memory_ids = memory_context.memory_ids
         remembered_constraints = [m.content for m in memory_context.constraints]
-        known_facts = remembered_constraints + [
-            m.content for m in memory_context.preferences
-        ]
+        known_facts = remembered_constraints + [m.content for m in memory_context.preferences]
 
     memory_section = ""
     if known_facts:
@@ -267,8 +263,7 @@ def _recent_exchange(state: AgentState, limit: int = 6) -> str:
         return "CONVERSATION SO FAR: (this is the first message)"
 
     lines = [
-        f"{'Traveller' if message.type == 'human' else 'Assistant'}: "
-        f"{str(message.content)[:400]}"
+        f"{'Traveller' if message.type == 'human' else 'Assistant'}: {str(message.content)[:400]}"
         for message in messages[-limit:]
     ]
     return "CONVERSATION SO FAR:\n" + "\n".join(lines)

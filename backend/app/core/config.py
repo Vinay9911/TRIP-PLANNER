@@ -86,8 +86,7 @@ class Settings(BaseSettings):
     # agent really is rejected, so this is a hard requirement rather than
     # etiquette. Format: "Name/version (contact-url; contact-email)".
     http_user_agent: str = (
-        "TripPlannerAgent/0.1 "
-        "(https://github.com/example/trip-planner; trip-planner@example.com)"
+        "TripPlannerAgent/0.1 (https://github.com/example/trip-planner; trip-planner@example.com)"
     )
     flight_provider: FlightProviderName = "mock"
     duffel_api_token: SecretStr = SecretStr("")

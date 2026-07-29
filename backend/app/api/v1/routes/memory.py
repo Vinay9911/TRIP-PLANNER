@@ -77,9 +77,7 @@ async def list_my_memories(
     if memory_service is None:
         raise ConfigurationError("Long-term memory is not configured on this deployment.")
 
-    memories = await memory_service.store.list_for_user(
-        user.id, include_inactive=include_inactive
-    )
+    memories = await memory_service.store.list_for_user(user.id, include_inactive=include_inactive)
     return [
         MemoryOut(
             id=memory.id,
@@ -168,10 +166,14 @@ async def erase_my_data(
         row = await cursor.fetchone()
 
     report = (row or {}).get("report") or {}
-    logger.info("privacy.user_data_erased", user_id=user.id, **{
-        key: report.get(key) for key in
-        ("memories_deleted", "messages_deleted", "sessions_deleted")
-    })
+    logger.info(
+        "privacy.user_data_erased",
+        user_id=user.id,
+        **{
+            key: report.get(key)
+            for key in ("memories_deleted", "messages_deleted", "sessions_deleted")
+        },
+    )
 
     return ErasureReport(
         memories_deleted=report.get("memories_deleted", 0),

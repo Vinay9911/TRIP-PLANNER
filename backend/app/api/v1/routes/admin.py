@@ -60,7 +60,9 @@ async def list_users(
     """
     users = await repository.list_users(admin.id, limit=limit)
     await repository.log_action(
-        admin.id, action="list_users", details={"count": len(users)},
+        admin.id,
+        action="list_users",
+        details={"count": len(users)},
         ip_address=client_ip(request),
     )
     return serialise_datetimes(users)  # type: ignore[no-any-return]

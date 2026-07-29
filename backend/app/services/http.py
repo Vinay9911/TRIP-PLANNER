@@ -100,7 +100,8 @@ def _raise_for_status(response: httpx.Response, *, service: str) -> None:
         raise RateLimitError(
             f"{service} rejected the request for exceeding its rate limit.",
             service=service,
-            retry_after_seconds=float(retry_after) if retry_after and retry_after.isdigit()
+            retry_after_seconds=float(retry_after)
+            if retry_after and retry_after.isdigit()
             else None,
             details={"status": response.status_code},
         )
@@ -175,9 +176,7 @@ async def request_json(
                     timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
                 )
             except httpx.TimeoutException as exc:
-                logger.warning(
-                    "http.timeout", service=service, url=url, attempt=attempt_number
-                )
+                logger.warning("http.timeout", service=service, url=url, attempt=attempt_number)
                 raise ExternalServiceTimeout(
                     f"{service} did not respond in time.",
                     service=service,

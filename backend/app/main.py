@@ -267,9 +267,7 @@ def create_app() -> FastAPI:
         return response
 
     @app.exception_handler(TripPlannerError)
-    async def handle_application_error(
-        request: Request, exc: TripPlannerError
-    ) -> JSONResponse:
+    async def handle_application_error(request: Request, exc: TripPlannerError) -> JSONResponse:
         """Translate any deliberate error into the standard JSON envelope."""
         if exc.status_code >= 500:
             logger.error("api.error", code=exc.code, message=exc.message, details=exc.details)

@@ -46,9 +46,7 @@ async def store_candidate(
 ):
     """Embed and consolidate a candidate, returning the outcome."""
     vector = (await embeddings.embed_documents([candidate.content]))[0]
-    return await consolidate_candidate(
-        user_id, candidate, vector, store, settings=settings
-    )
+    return await consolidate_candidate(user_id, candidate, vector, store, settings=settings)
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +56,15 @@ async def store_candidate(
 
 async def test_first_memory_is_inserted(user_id, memory_store, embeddings, settings):
     outcome = await store_candidate(
-        make_candidate("Traveller is vegetarian and does not eat fish.",
-                       memory_type=MemoryType.CONSTRAINT, subject=MemorySubject.DIET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        make_candidate(
+            "Traveller is vegetarian and does not eat fish.",
+            memory_type=MemoryType.CONSTRAINT,
+            subject=MemorySubject.DIET,
+        ),
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
 
     assert outcome.action is ConsolidationAction.INSERTED
@@ -73,14 +77,22 @@ async def test_first_memory_is_inserted(user_id, memory_store, embeddings, setti
 
 async def test_unrelated_facts_coexist(user_id, memory_store, embeddings, settings):
     await store_candidate(
-        make_candidate("Traveller enjoys visiting art museums and galleries.",
-                       subject=MemorySubject.INTERESTS),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        make_candidate(
+            "Traveller enjoys visiting art museums and galleries.", subject=MemorySubject.INTERESTS
+        ),
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
     outcome = await store_candidate(
-        make_candidate("Traveller prefers hiking mountain trails outdoors.",
-                       subject=MemorySubject.INTERESTS),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        make_candidate(
+            "Traveller prefers hiking mountain trails outdoors.", subject=MemorySubject.INTERESTS
+        ),
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
 
     assert outcome.action is ConsolidationAction.INSERTED
@@ -100,11 +112,17 @@ async def test_identical_fact_reinforces_instead_of_duplicating(
 
     first = await store_candidate(
         make_candidate(content, memory_type=MemoryType.CONSTRAINT, subject=MemorySubject.DIET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
     second = await store_candidate(
         make_candidate(content, memory_type=MemoryType.CONSTRAINT, subject=MemorySubject.DIET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
 
     assert first.action is ConsolidationAction.INSERTED
@@ -124,8 +142,11 @@ async def test_reinforcement_raises_confidence_but_caps_at_one(
 
     for _ in range(8):
         await store_candidate(
-            candidate, user_id=user_id, store=memory_store,
-            embeddings=embeddings, settings=settings,
+            candidate,
+            user_id=user_id,
+            store=memory_store,
+            embeddings=embeddings,
+            settings=settings,
         )
 
     stored = (await memory_store.list_for_user(user_id))[0]
@@ -152,13 +173,19 @@ async def test_contradiction_supersedes_the_older_memory(
 
     old = await store_candidate(
         make_candidate("Traveller travels on a tight budget.", subject=MemorySubject.BUDGET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
     # Overlapping wording puts this in the arbitration band rather than the
     # duplicate band.
     new = await store_candidate(
         make_candidate("Traveller travels on a generous budget.", subject=MemorySubject.BUDGET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
 
     assert new.action is ConsolidationAction.SUPERSEDED
@@ -186,12 +213,19 @@ async def test_compatible_refinement_keeps_both(
 
     await store_candidate(
         make_candidate("Traveller enjoys visiting museums often.", subject=MemorySubject.INTERESTS),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
     outcome = await store_candidate(
-        make_candidate("Traveller enjoys visiting modern galleries often.",
-                       subject=MemorySubject.INTERESTS),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        make_candidate(
+            "Traveller enjoys visiting modern galleries often.", subject=MemorySubject.INTERESTS
+        ),
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
 
     assert outcome.action is ConsolidationAction.INSERTED
@@ -212,11 +246,17 @@ async def test_arbitration_failure_keeps_both_memories(
 
     await store_candidate(
         make_candidate("Traveller travels on a tight budget.", subject=MemorySubject.BUDGET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
     outcome = await store_candidate(
         make_candidate("Traveller travels on a generous budget.", subject=MemorySubject.BUDGET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
 
     assert outcome.action is ConsolidationAction.INSERTED
@@ -245,14 +285,24 @@ async def test_contradiction_detection_is_scoped_to_a_subject_slot(
     monkeypatch.setattr(consolidator, "_classify_relationship", recording_classify)
 
     await store_candidate(
-        make_candidate("Traveller avoids eating meat entirely.",
-                       memory_type=MemoryType.CONSTRAINT, subject=MemorySubject.DIET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        make_candidate(
+            "Traveller avoids eating meat entirely.",
+            memory_type=MemoryType.CONSTRAINT,
+            subject=MemorySubject.DIET,
+        ),
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
     await store_candidate(
-        make_candidate("Traveller avoids eating expensive restaurants.",
-                       subject=MemorySubject.BUDGET),
-        user_id=user_id, store=memory_store, embeddings=embeddings, settings=settings,
+        make_candidate(
+            "Traveller avoids eating expensive restaurants.", subject=MemorySubject.BUDGET
+        ),
+        user_id=user_id,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
 
     assert all(pair[0] == pair[1] for pair in seen), (
@@ -267,11 +317,17 @@ async def test_memories_are_isolated_between_users(memory_store, embeddings, set
 
     await store_candidate(
         make_candidate(content, memory_type=MemoryType.CONSTRAINT, subject=MemorySubject.DIET),
-        user_id=alice, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=alice,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
     outcome = await store_candidate(
         make_candidate(content, memory_type=MemoryType.CONSTRAINT, subject=MemorySubject.DIET),
-        user_id=bob, store=memory_store, embeddings=embeddings, settings=settings,
+        user_id=bob,
+        store=memory_store,
+        embeddings=embeddings,
+        settings=settings,
     )
 
     # Bob's identical fact must not be treated as a duplicate of Alice's.
@@ -306,10 +362,10 @@ def test_heuristic_gate_admits_facts_and_skips_noise(message, expected):
 @pytest.mark.parametrize(
     "message",
     [
-        "私はベジタリアンです",       # Japanese: "I am vegetarian" - 10 chars
-        "أنا نباتي",                  # Arabic: "I am vegetarian" - 9 chars
-        "我是素食主义者",              # Chinese: "I am a vegetarian" - 7 chars
-        "저는 채식주의자입니다",        # Korean: "I am a vegetarian"
+        "私はベジタリアンです",  # Japanese: "I am vegetarian" - 10 chars
+        "أنا نباتي",  # Arabic: "I am vegetarian" - 9 chars
+        "我是素食主义者",  # Chinese: "I am a vegetarian" - 7 chars
+        "저는 채식주의자입니다",  # Korean: "I am a vegetarian"
     ],
 )
 def test_heuristic_gate_admits_short_non_latin_statements(message):
@@ -347,8 +403,13 @@ def test_prompt_block_marks_constraints_distinctly():
     context = MemoryContext(
         constraints=[
             StoredMemory(
-                id="1", user_id="u", memory_type=MemoryType.CONSTRAINT, subject="allergy",
-                content="Traveller is allergic to nuts.", confidence=1.0, mention_count=3,
+                id="1",
+                user_id="u",
+                memory_type=MemoryType.CONSTRAINT,
+                subject="allergy",
+                content="Traveller is allergic to nuts.",
+                confidence=1.0,
+                mention_count=3,
             )
         ],
         preferences=[],

@@ -86,7 +86,8 @@ class DistrictSelection(BaseModel):
         ),
     )
     reasoning: str = Field(
-        default="", max_length=300,
+        default="",
+        max_length=300,
         description="One or two sentences on why these suit this traveller.",
     )
 
@@ -98,7 +99,8 @@ class SufficiencyCheck(BaseModel):
         description="True if the retrieved passages can answer the request without guessing."
     )
     missing: str = Field(
-        default="", max_length=200,
+        default="",
+        max_length=200,
         description=(
             "If not sufficient, the single most important thing still missing, phrased "
             "as a search query. Empty when sufficient."
@@ -487,8 +489,7 @@ class MultiHopRetriever:
                 name="constrain",
                 query=" | ".join(queries),
                 derived_from=(
-                    f"hop 2 districts ({', '.join(result.districts_selected)}) "
-                    f"x stated constraints"
+                    f"hop 2 districts ({', '.join(result.districts_selected)}) x stated constraints"
                 ),
                 documents=result.districts_selected,
                 chunks_returned=len(collected) - before,

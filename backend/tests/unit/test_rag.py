@@ -71,8 +71,10 @@ def test_navigation_sections_are_dropped():
 def test_redirect_variants_of_a_district_are_collapsed():
     """Wikivoyage keeps redirects as real pages, so allpages returns both."""
     titles = [
-        "Paris/10th", "Paris/10th arrondissement",
-        "Paris/11th", "Paris/11th arrondissement",
+        "Paris/10th",
+        "Paris/10th arrondissement",
+        "Paris/11th",
+        "Paris/11th arrondissement",
         "Paris/Montmartre",
     ]
 
@@ -284,9 +286,7 @@ async def test_unknown_destination_stops_cleanly(stub_retriever):
     assert result.stopped_because == "destination_not_found"
 
 
-async def test_hallucinated_district_names_are_filtered_out(
-    embeddings, settings, monkeypatch
-):
+async def test_hallucinated_district_names_are_filtered_out(embeddings, settings, monkeypatch):
     """A model naming a district that does not exist must cost nothing."""
     from app.rag import retriever as retriever_module
     from app.rag.retriever import DistrictSelection, SufficiencyCheck

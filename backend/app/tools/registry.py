@@ -168,9 +168,7 @@ async def search_web(
         recent_only: Restrict to the past month. Good for events and
             closures, wrong for general background.
     """
-    return _serialise(
-        await web_search.search_web(query, max_results, deep_search, recent_only)
-    )
+    return _serialise(await web_search.search_web(query, max_results, deep_search, recent_only))
 
 
 @tool

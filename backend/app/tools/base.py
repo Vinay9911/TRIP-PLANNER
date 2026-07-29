@@ -271,8 +271,9 @@ def resilient_tool(
                     # this project is called with keywords by the model, and
                     # `args` would otherwise capture `self`-like values that
                     # are noise in a trace.
-                    arguments={key: value for key, value in kwargs.items()
-                               if _is_recordable(value)},
+                    arguments={
+                        key: value for key, value in kwargs.items() if _is_recordable(value)
+                    },
                     status=result.status,
                     source=source,
                     latency_ms=latency_ms,

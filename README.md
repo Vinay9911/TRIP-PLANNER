@@ -210,11 +210,43 @@ outside `app/core/config.py`.
 
 ---
 
-## Running it
+### 5. Frontend (optional but recommended)
+
+The chat and admin interface is a separate Next.js app.
 
 ```bash
+cd frontend
+npm install
+cp .env.example .env.local
+```
+
+Fill in `.env.local`:
+
+```
+NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key_here
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+All three are `NEXT_PUBLIC_` and visible in the browser bundle, which is
+correct for each: the anon key is designed to be public and is constrained by
+row level security. **Never put the `service_role` key here** — it bypasses
+RLS entirely.
+
+---
+
+## Running it
+
+Two processes. Start the backend first.
+
+```bash
+# Terminal 1 — API
 cd backend
 uvicorn app.main:app --reload
+
+# Terminal 2 — UI
+cd frontend
+npm run dev
 ```
 
 - API — <http://localhost:8000>

@@ -41,12 +41,30 @@ logger = get_logger(__name__)
 # Language names for the reply instruction. A BCP-47 tag alone produces less
 # reliable compliance than naming the language.
 LANGUAGE_NAMES: Final[dict[str, str]] = {
-    "en": "English", "ja": "Japanese", "zh": "Chinese", "ko": "Korean",
-    "es": "Spanish", "fr": "French", "de": "German", "it": "Italian",
-    "pt": "Portuguese", "ru": "Russian", "ar": "Arabic", "hi": "Hindi",
-    "bn": "Bengali", "ta": "Tamil", "te": "Telugu", "mr": "Marathi",
-    "id": "Indonesian", "ms": "Malay", "th": "Thai", "vi": "Vietnamese",
-    "nl": "Dutch", "pl": "Polish", "tr": "Turkish", "sv": "Swedish",
+    "en": "English",
+    "ja": "Japanese",
+    "zh": "Chinese",
+    "ko": "Korean",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "bn": "Bengali",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "mr": "Marathi",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "th": "Thai",
+    "vi": "Vietnamese",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "tr": "Turkish",
+    "sv": "Swedish",
 }
 
 RESPONDER_PROMPT = """\
@@ -182,8 +200,12 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
             ),
             status="failed",
             errors=[{"node": "responder", "error": exc.message}],
-            messages=[AIMessage(content="Sorry - something went wrong writing that up. "
-                                        "Please try again in a moment.")],
+            messages=[
+                AIMessage(
+                    content="Sorry - something went wrong writing that up. "
+                    "Please try again in a moment."
+                )
+            ],
         )
 
     ungrounded = _find_ungrounded_claims(answer, findings)
@@ -208,7 +230,8 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
 
     return AgentState(
         final_response=answer,
-        status="partial" if state.get("stopped_because") == "replan_budget_exhausted"
+        status="partial"
+        if state.get("stopped_because") == "replan_budget_exhausted"
         else "completed",
         messages=[AIMessage(content=answer)],
     )

@@ -121,8 +121,7 @@ async def chat(
         detected_language=result.detected_language,
         destination=result.destination,
         plan=[
-            PlanStepSummary(description=step.description, kind=step.kind)
-            for step in result.plan
+            PlanStepSummary(description=step.description, kind=step.kind) for step in result.plan
         ],
         tool_calls=[
             ToolCallSummary(
@@ -156,9 +155,7 @@ async def list_sessions(user: CurrentUser, sessions: Sessions) -> list[SessionSu
     responses={404: {"model": ErrorResponse, "description": "Not found"}},
     summary="Get one conversation with its messages",
 )
-async def get_session(
-    session_id: str, user: CurrentUser, sessions: Sessions
-) -> SessionDetail:
+async def get_session(session_id: str, user: CurrentUser, sessions: Sessions) -> SessionDetail:
     """Fetch one conversation and its full message history.
 
     Returns 404 for a conversation belonging to another user - the same

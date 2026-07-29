@@ -130,13 +130,27 @@ _CITY_DATA: Final[dict[str, tuple[str, float, float, int]]] = {
 # Plausible carriers by broad region of the departure airport, so a flight out
 # of Tokyo is not operated by a Latin American airline.
 _CARRIERS: Final[dict[str, list[tuple[str, str]]]] = {
-    "asia": [("NH", "All Nippon Airways"), ("SQ", "Singapore Airlines"),
-             ("CX", "Cathay Pacific"), ("JL", "Japan Airlines"), ("TG", "Thai Airways")],
+    "asia": [
+        ("NH", "All Nippon Airways"),
+        ("SQ", "Singapore Airlines"),
+        ("CX", "Cathay Pacific"),
+        ("JL", "Japan Airlines"),
+        ("TG", "Thai Airways"),
+    ],
     "india": [("AI", "Air India"), ("6E", "IndiGo"), ("UK", "Vistara")],
-    "europe": [("BA", "British Airways"), ("LH", "Lufthansa"), ("AF", "Air France"),
-               ("KL", "KLM"), ("IB", "Iberia")],
-    "americas": [("AA", "American Airlines"), ("DL", "Delta Air Lines"),
-                 ("UA", "United Airlines"), ("AC", "Air Canada")],
+    "europe": [
+        ("BA", "British Airways"),
+        ("LH", "Lufthansa"),
+        ("AF", "Air France"),
+        ("KL", "KLM"),
+        ("IB", "Iberia"),
+    ],
+    "americas": [
+        ("AA", "American Airlines"),
+        ("DL", "Delta Air Lines"),
+        ("UA", "United Airlines"),
+        ("AC", "Air Canada"),
+    ],
     "oceania": [("QF", "Qantas"), ("NZ", "Air New Zealand")],
     "middle_east": [("EK", "Emirates"), ("QR", "Qatar Airways"), ("TK", "Turkish Airlines")],
     "africa": [("ET", "Ethiopian Airlines"), ("MS", "EgyptAir"), ("SA", "South African Airways")],
@@ -267,9 +281,7 @@ def _seasonality(departure: date, latitude: float) -> float:
     # Summer peak around July/August.
     summer = 1.0 + 0.18 * math.cos((effective_month - 7.5) * math.pi / 6)
     # Holiday bump around the new year, independent of hemisphere.
-    in_holiday_window = (month == 12 and departure.day >= 18) or (
-        month == 1 and departure.day <= 5
-    )
+    in_holiday_window = (month == 12 and departure.day >= 18) or (month == 1 and departure.day <= 5)
     holiday = 1.12 if in_holiday_window else 1.0
     return round(summer * holiday, 3)
 
@@ -420,15 +432,19 @@ class MockFlightProvider:
         seed = _seed(from_iata, to_iata, departure_date, cabin)
 
         # Non-stop is only plausible under roughly 12,000 km.
-        offer_shapes = [
-            ("non-stop", 0, 1.00),
-            ("non-stop", 0, 1.18),
-            ("1 stop", 1, 0.82),
-        ] if distance_km <= 12000 else [
-            ("1 stop", 1, 1.00),
-            ("1 stop", 1, 1.15),
-            ("2 stops", 2, 0.88),
-        ]
+        offer_shapes = (
+            [
+                ("non-stop", 0, 1.00),
+                ("non-stop", 0, 1.18),
+                ("1 stop", 1, 0.82),
+            ]
+            if distance_km <= 12000
+            else [
+                ("1 stop", 1, 1.00),
+                ("1 stop", 1, 1.15),
+                ("2 stops", 2, 0.88),
+            ]
+        )
 
         offers: list[dict[str, Any]] = []
         for index, (label, stops, shape_factor) in enumerate(offer_shapes):

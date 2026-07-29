@@ -61,22 +61,34 @@ logger = get_logger(__name__)
 # loses information for good.
 _SIGNAL_PATTERNS: Final[list[re.Pattern[str]]] = [
     # First-person statements of state, preference or capability.
-    re.compile(r"\b(i|we|my|our|me|us)\b.{0,40}\b("
-               r"am|are|was|were|have|has|had|like|love|prefer|enjoy|hate|dislike|"
-               r"avoid|need|want|can't|cannot|don't|do not|never|always|usually|"
-               r"allergic|vegetarian|vegan|budget|afford)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(i|we|my|our|me|us)\b.{0,40}\b("
+        r"am|are|was|were|have|has|had|like|love|prefer|enjoy|hate|dislike|"
+        r"avoid|need|want|can't|cannot|don't|do not|never|always|usually|"
+        r"allergic|vegetarian|vegan|budget|afford)\b",
+        re.IGNORECASE,
+    ),
     # Explicit dietary, accessibility and travel-party vocabulary, which can
     # appear without a first-person pronoun ("no pork, please").
-    re.compile(r"\b(vegetarian|vegan|halal|kosher|gluten|allergy|allergic|lactose|"
-               r"wheelchair|accessible|mobility|stroller|pram|"
-               r"pet|dog|cat|kids|children|toddler|infant|"
-               r"budget|cheap|luxury|backpack|splurge|shoestring|mid-range)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(vegetarian|vegan|halal|kosher|gluten|allergy|allergic|lactose|"
+        r"wheelchair|accessible|mobility|stroller|pram|"
+        r"pet|dog|cat|kids|children|toddler|infant|"
+        r"budget|cheap|luxury|backpack|splurge|shoestring|mid-range)\b",
+        re.IGNORECASE,
+    ),
     # Travel history and verdicts.
-    re.compile(r"\b(visited|been to|went to|last time|previously|last year|"
-               r"loved|hated|too crowded|too touristy|disappointing)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(visited|been to|went to|last time|previously|last year|"
+        r"loved|hated|too crowded|too touristy|disappointing)\b",
+        re.IGNORECASE,
+    ),
     # Pace and style.
-    re.compile(r"\b(slow|relaxed|packed|busy|early riser|night owl|"
-               r"off the beaten|hidden gem|touristy|authentic)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(slow|relaxed|packed|busy|early riser|night owl|"
+        r"off the beaten|hidden gem|touristy|authentic)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 # Non-Latin scripts defeat the English regexes above. Rather than maintain a

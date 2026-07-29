@@ -125,8 +125,9 @@ async def executor_node(
         succeeded, error = True, None
 
     except TimeoutError:
-        logger.warning("agent.step_timeout", step=step.description[:80],
-                       timeout=cfg.agent_step_timeout_seconds)
+        logger.warning(
+            "agent.step_timeout", step=step.description[:80], timeout=cfg.agent_step_timeout_seconds
+        )
         output = ""
         succeeded = False
         error = f"Step timed out after {cfg.agent_step_timeout_seconds}s."
@@ -201,8 +202,7 @@ def _build_step_prompt(state: AgentState, step: PlanStep) -> str:
         )
     if state.get("constraints"):
         sections.append(
-            "HARD REQUIREMENTS (pass these to tools as filters): "
-            + "; ".join(state["constraints"])
+            "HARD REQUIREMENTS (pass these to tools as filters): " + "; ".join(state["constraints"])
         )
     if state.get("memory_block"):
         sections.append(state["memory_block"])

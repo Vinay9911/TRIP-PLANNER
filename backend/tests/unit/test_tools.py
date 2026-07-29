@@ -89,8 +89,13 @@ async def test_degraded_message_tells_the_model_not_to_retry():
     forbidding_phrases = ("do not retry", "do not call this tool again")
 
     for message in (
-        WEATHER_UNAVAILABLE, PLACES_UNAVAILABLE, SEARCH_UNAVAILABLE,
-        GUIDE_UNAVAILABLE, FLIGHTS_UNAVAILABLE, STAYS_UNAVAILABLE, MEMORY_UNAVAILABLE,
+        WEATHER_UNAVAILABLE,
+        PLACES_UNAVAILABLE,
+        SEARCH_UNAVAILABLE,
+        GUIDE_UNAVAILABLE,
+        FLIGHTS_UNAVAILABLE,
+        STAYS_UNAVAILABLE,
+        MEMORY_UNAVAILABLE,
     ):
         lowered = message.lower()
         assert any(phrase in lowered for phrase in forbidding_phrases), (
@@ -148,8 +153,17 @@ async def test_weather_translates_wmo_codes_into_words(settings, tool_records):
     respx.get(url__startswith=settings.open_meteo_geocoding_url).mock(
         return_value=httpx.Response(
             200,
-            json={"results": [{"name": "Kyoto", "country": "Japan", "latitude": 35.0,
-                               "longitude": 135.76, "timezone": "Asia/Tokyo"}]},
+            json={
+                "results": [
+                    {
+                        "name": "Kyoto",
+                        "country": "Japan",
+                        "latitude": 35.0,
+                        "longitude": 135.76,
+                        "timezone": "Asia/Tokyo",
+                    }
+                ]
+            },
         )
     )
     respx.get(url__startswith=settings.open_meteo_base_url).mock(
@@ -189,15 +203,29 @@ async def test_weather_beyond_the_horizon_is_labelled_not_a_forecast(settings, t
     respx.get(url__startswith=settings.open_meteo_geocoding_url).mock(
         return_value=httpx.Response(
             200,
-            json={"results": [{"name": "Kyoto", "country": "Japan", "latitude": 35.0,
-                               "longitude": 135.76, "timezone": "Asia/Tokyo"}]},
+            json={
+                "results": [
+                    {
+                        "name": "Kyoto",
+                        "country": "Japan",
+                        "latitude": 35.0,
+                        "longitude": 135.76,
+                        "timezone": "Asia/Tokyo",
+                    }
+                ]
+            },
         )
     )
     respx.get(url__startswith="https://archive-api.open-meteo.com").mock(
         return_value=httpx.Response(
             200,
-            json={"daily": {"temperature_2m_max": [30.0], "temperature_2m_min": [22.0],
-                            "precipitation_sum": [3.0]}},
+            json={
+                "daily": {
+                    "temperature_2m_max": [30.0],
+                    "temperature_2m_min": [22.0],
+                    "precipitation_sum": [3.0],
+                }
+            },
         )
     )
 
@@ -256,9 +284,7 @@ def test_duplicate_osm_venues_are_collapsed():
 
 async def test_flight_results_are_labelled_as_simulated(settings, tool_records):
     """Presenting mock fares as bookable is the failure this guards against."""
-    result = await search_flights(
-        "Singapore", "Tokyo", "2026-09-15", settings=settings
-    )
+    result = await search_flights("Singapore", "Tokyo", "2026-09-15", settings=settings)
 
     assert result.status is ToolStatus.OK
     assert "SIMULATED" in result.data["data_disclaimer"]
@@ -292,25 +318,19 @@ async def test_malformed_date_is_reported_as_invalid(settings, tool_records):
 
 
 async def test_reversed_dates_are_rejected(settings, tool_records):
-    result = await search_accommodation(
-        "Tokyo", "2026-09-17", "2026-09-15", settings=settings
-    )
+    result = await search_accommodation("Tokyo", "2026-09-17", "2026-09-15", settings=settings)
 
     assert result.status is ToolStatus.INVALID
 
 
 async def test_accommodation_budget_filter_is_applied(settings, tool_records):
-    unfiltered = await search_accommodation(
-        "Tokyo", "2026-09-15", "2026-09-17", settings=settings
-    )
+    unfiltered = await search_accommodation("Tokyo", "2026-09-15", "2026-09-17", settings=settings)
     filtered = await search_accommodation(
         "Tokyo", "2026-09-15", "2026-09-17", max_price_per_night=90, settings=settings
     )
 
     assert len(filtered.data["properties"]) < len(unfiltered.data["properties"])
-    assert all(
-        prop["price_per_night_usd"] <= 90 for prop in filtered.data["properties"]
-    )
+    assert all(prop["price_per_night_usd"] <= 90 for prop in filtered.data["properties"])
 
 
 # ---------------------------------------------------------------------------
@@ -321,8 +341,13 @@ async def test_accommodation_budget_filter_is_applied(settings, tool_records):
 def test_all_tools_are_registered():
     names = get_tool_names()
     expected = {
-        "search_travel_guide", "find_places", "get_weather_forecast", "search_web",
-        "search_flights", "search_accommodation", "recall_user_preferences",
+        "search_travel_guide",
+        "find_places",
+        "get_weather_forecast",
+        "search_web",
+        "search_flights",
+        "search_accommodation",
+        "recall_user_preferences",
         "save_user_preference",
     }
     assert expected.issubset(set(names))

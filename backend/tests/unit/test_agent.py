@@ -26,7 +26,9 @@ def make_step(description: str = "Research the destination", kind: str = "resear
 
 def make_result(*, succeeded: bool = True, kind: str = "research", output: str = "found things"):
     return StepResult(
-        step=make_step(kind=kind), succeeded=succeeded, output=output if succeeded else "",
+        step=make_step(kind=kind),
+        succeeded=succeeded,
+        output=output if succeeded else "",
         error=None if succeeded else "tool unavailable",
     )
 
@@ -97,9 +99,7 @@ async def test_replan_budget_exhaustion_ends_the_run_as_partial(settings):
     assert route_after_replan({**state, **update}) == "respond"
 
 
-async def test_replanner_skips_its_model_call_when_the_last_step_succeeded(
-    settings, monkeypatch
-):
+async def test_replanner_skips_its_model_call_when_the_last_step_succeeded(settings, monkeypatch):
     """Asking 'should I continue?' after a success costs a request for an obvious answer."""
     from app.agent.nodes import replanner
 

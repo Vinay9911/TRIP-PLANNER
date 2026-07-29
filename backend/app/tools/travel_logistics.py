@@ -21,9 +21,7 @@ from app.core.errors import ToolExecutionError
 from app.providers.flights import get_flight_provider
 from app.tools.base import ToolResult, resilient_tool
 
-VALID_CABINS: Final[frozenset[str]] = frozenset(
-    {"economy", "premium_economy", "business", "first"}
-)
+VALID_CABINS: Final[frozenset[str]] = frozenset({"economy", "premium_economy", "business", "first"})
 
 FLIGHTS_UNAVAILABLE: Final[str] = (
     "Flight search is unavailable. Continue building the itinerary without transport "
@@ -116,8 +114,7 @@ async def search_flights(
         return ToolResult.invalid(
             source="flight-provider",
             message=(
-                f"{cabin!r} is not a valid cabin. Choose one of: "
-                f"{', '.join(sorted(VALID_CABINS))}."
+                f"{cabin!r} is not a valid cabin. Choose one of: {', '.join(sorted(VALID_CABINS))}."
             ),
         )
 

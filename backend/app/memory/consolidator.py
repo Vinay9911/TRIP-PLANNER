@@ -183,7 +183,10 @@ async def consolidate_candidate(
 
     if not neighbours:
         return await _insert(
-            user_id, candidate, embedding, store,
+            user_id,
+            candidate,
+            embedding,
+            store,
             source_message_id=source_message_id,
             source_session_id=source_session_id,
             source_lang=source_lang,
@@ -231,7 +234,9 @@ async def consolidate_candidate(
 
         if verdict.relationship == "contradiction":
             new_id = await store.insert(
-                user_id, candidate, embedding,
+                user_id,
+                candidate,
+                embedding,
                 source_message_id=source_message_id,
                 source_session_id=source_session_id,
                 source_lang=source_lang,
@@ -255,7 +260,10 @@ async def consolidate_candidate(
 
         # compatible - fall through and insert alongside.
         return await _insert(
-            user_id, candidate, embedding, store,
+            user_id,
+            candidate,
+            embedding,
+            store,
             source_message_id=source_message_id,
             source_session_id=source_session_id,
             source_lang=source_lang,
@@ -265,7 +273,10 @@ async def consolidate_candidate(
 
     # --- Band 3: genuinely new --------------------------------------------
     return await _insert(
-        user_id, candidate, embedding, store,
+        user_id,
+        candidate,
+        embedding,
+        store,
         source_message_id=source_message_id,
         source_session_id=source_session_id,
         source_lang=source_lang,
@@ -303,7 +314,9 @@ async def _insert(
         The outcome describing the insertion.
     """
     memory_id = await store.insert(
-        user_id, candidate, embedding,
+        user_id,
+        candidate,
+        embedding,
         source_message_id=source_message_id,
         source_session_id=source_session_id,
         source_lang=source_lang,

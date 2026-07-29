@@ -64,8 +64,9 @@ class RagIndex(Protocol):
         """Whether an unexpired copy of this article is already indexed."""
         ...
 
-    async def index_article(self, article: Article, chunks: list[Chunk],
-                            embeddings: list[list[float]]) -> str:
+    async def index_article(
+        self, article: Article, chunks: list[Chunk], embeddings: list[list[float]]
+    ) -> str:
         """Store an article and its embedded chunks, replacing any prior copy."""
         ...
 
@@ -245,9 +246,7 @@ class InMemoryRagIndex:
         self, article: Article, chunks: list[Chunk], embeddings: list[list[float]]
     ) -> str:
         """Store an article and its embedded chunks."""
-        self._chunks = [
-            entry for entry in self._chunks if entry[0].document_title != article.title
-        ]
+        self._chunks = [entry for entry in self._chunks if entry[0].document_title != article.title]
         self._documents[article.title] = article
         self._chunks.extend(zip(chunks, embeddings, strict=True))
         return str(uuid4())

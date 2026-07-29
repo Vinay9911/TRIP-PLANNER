@@ -89,8 +89,10 @@ class MemoryContext:
 
         if self.preferences:
             lines.append("")
-            lines.append("Preferences and history - use these to personalise, not to override "
-                         "anything the traveller says now:")
+            lines.append(
+                "Preferences and history - use these to personalise, not to override "
+                "anything the traveller says now:"
+            )
             lines.extend(f"  - {memory.content}" for memory in self.preferences)
 
         lines.append("")

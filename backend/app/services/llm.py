@@ -115,8 +115,9 @@ def _build_model(
     )
 
 
-def get_model(role: ModelRole, *, settings: Settings | None = None,
-              temperature: float | None = None) -> BaseChatModel:
+def get_model(
+    role: ModelRole, *, settings: Settings | None = None, temperature: float | None = None
+) -> BaseChatModel:
     """Return the chat model configured for a role.
 
     Args:

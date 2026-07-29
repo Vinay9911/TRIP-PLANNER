@@ -198,8 +198,9 @@ def _drop_orphan_tool_messages(messages: list[AnyMessage]) -> list[AnyMessage]:
     cleaned: list[AnyMessage] = []
     for message in messages:
         if isinstance(message, ToolMessage) and message.tool_call_id not in available_call_ids:
-            logger.debug("conversation.dropped_orphan_tool_message",
-                         tool_call_id=message.tool_call_id)
+            logger.debug(
+                "conversation.dropped_orphan_tool_message", tool_call_id=message.tool_call_id
+            )
             continue
         cleaned.append(message)
 
@@ -260,8 +261,7 @@ async def summarise_conversation(
         "- decisions already made and suggestions they explicitly rejected, and why\n"
         "- what is still open or undecided\n\n"
         "Omit pleasantries and anything already settled that will not affect what comes "
-        "next. Write plain prose, no headings.\n\n"
-        + "\n".join(transcript_lines)
+        "next. Write plain prose, no headings.\n\n" + "\n".join(transcript_lines)
     )
 
     try:

@@ -641,8 +641,7 @@ class InMemoryMemoryStore:
             if memory.user_id == user_id
             and (include_inactive or memory.status == MemoryStatus.ACTIVE)
         ]
-        matches.sort(key=lambda m: m.last_seen_at or datetime.min.replace(tzinfo=UTC),
-                     reverse=True)
+        matches.sort(key=lambda m: m.last_seen_at or datetime.min.replace(tzinfo=UTC), reverse=True)
         return matches[:limit]
 
     async def delete(self, memory_id: str, user_id: str) -> bool:
