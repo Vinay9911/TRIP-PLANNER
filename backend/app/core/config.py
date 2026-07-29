@@ -79,6 +79,16 @@ class Settings(BaseSettings):
     open_meteo_base_url: str = "https://api.open-meteo.com/v1"
     open_meteo_geocoding_url: str = "https://geocoding-api.open-meteo.com/v1"
     wikivoyage_api_base_url: str = "https://en.wikivoyage.org/w/api.php"
+
+    # Wikimedia's robot policy requires a User-Agent naming the client and a
+    # way to contact its operator; requests without one are answered with a
+    # 403 and a link to the policy. Verified against the live API - a generic
+    # agent really is rejected, so this is a hard requirement rather than
+    # etiquette. Format: "Name/version (contact-url; contact-email)".
+    http_user_agent: str = (
+        "TripPlannerAgent/0.1 "
+        "(https://github.com/example/trip-planner; trip-planner@example.com)"
+    )
     flight_provider: FlightProviderName = "mock"
     duffel_api_token: SecretStr = SecretStr("")
 

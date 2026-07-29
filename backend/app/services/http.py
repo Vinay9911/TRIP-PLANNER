@@ -59,18 +59,16 @@ def get_client() -> httpx.AsyncClient:
     """
     global _client
     if _client is None:
+        from app.core.config import get_settings
+
         _client = httpx.AsyncClient(
             timeout=DEFAULT_TIMEOUT,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             follow_redirects=True,
-            headers={
-                # Wikimedia's API policy asks for a descriptive User-Agent and
-                # rate-limits anonymous default agents more aggressively.
-                "User-Agent": (
-                    "TripPlannerAgent/0.1 "
-                    "(https://github.com/; educational technical assessment)"
-                )
-            },
+            # Wikimedia rejects requests whose User-Agent does not identify the
+            # client and a contact address - a 403, not a soft rate limit. See
+            # `Settings.http_user_agent`.
+            headers={"User-Agent": get_settings().http_user_agent},
         )
     return _client
 
