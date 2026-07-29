@@ -89,6 +89,10 @@ class ChatResponse(BaseModel):
     steps_executed: int = 0
     replan_count: int = 0
     latency_ms: int = 0
+    #: Tokens this turn consumed. Exposed because on a free tier the
+    #: per-minute token allowance - not the request count - is what limits
+    #: throughput, and you cannot budget for what you cannot see.
+    total_tokens: int = 0
 
     model_config = {
         "json_schema_extra": {

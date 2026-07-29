@@ -58,6 +58,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError, RateLimitError
 from app.core.logging import get_logger
 from app.services.keys import AllKeysExhausted, KeyPool, get_pool
+from app.services.usage import record as record_usage
 
 logger = get_logger(__name__)
 
@@ -304,7 +305,12 @@ async def _invoke_rotating(
             api_key=api_key,
         )
         if schema is not None:
-            model = model.with_structured_output(schema)
+            # `include_raw` returns {"raw": AIMessage, "parsed": Model, ...}
+            # instead of just the parsed model. Without it the usage metadata
+            # is discarded along with the underlying message, and token
+            # accounting silently reports zero for every structured call -
+            # which is most of them.
+            model = model.with_structured_output(schema, include_raw=True)
 
         try:
             response = await model.ainvoke(messages)
@@ -347,7 +353,31 @@ async def _invoke_rotating(
 
         pool.report_success(api_key)
 
+        # Structured calls come back as a dict carrying both the parsed model
+        # and the raw message; plain calls return the message itself. Usage
+        # always lives on the raw message.
+        if isinstance(response, dict) and "raw" in response:
+            raw_message = response["raw"]
+            parsing_error = response.get("parsing_error")
+            response = response.get("parsed")
+        else:
+            raw_message = response
+            parsing_error = None
+
+        usage = getattr(raw_message, "usage_metadata", None) or {}
+        record_usage(
+            purpose,
+            int(usage.get("input_tokens") or 0),
+            int(usage.get("output_tokens") or 0),
+        )
+
         if schema is not None:
+            if parsing_error is not None or response is None:
+                raise ExternalServiceError(
+                    f"Model reply could not be parsed as {schema.__name__}.",
+                    service="groq",
+                    details={"purpose": purpose, "error": str(parsing_error)[:300]},
+                )
             # `with_structured_output` may hand back a plain dict depending on
             # the provider's tool-calling implementation. Validate, never trust.
             if not isinstance(response, schema):
@@ -360,7 +390,13 @@ async def _invoke_rotating(
                         service="groq",
                         details={"purpose": purpose, "received": str(response)[:300]},
                     ) from exc
-            logger.info("llm.structured_completed", purpose=purpose, schema=schema.__name__)
+            logger.info(
+                "llm.structured_completed",
+                purpose=purpose,
+                schema=schema.__name__,
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+            )
             return response
 
         usage = getattr(response, "usage_metadata", None) or {}

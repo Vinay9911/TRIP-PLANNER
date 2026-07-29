@@ -106,13 +106,18 @@ def check_groq(raw: str) -> None:
     if not total_tpm:
         return
 
-    # A full itinerary costs roughly 40,000 tokens: the executor resends its
-    # tool schemas and accumulated findings on every reasoning round trip.
-    cost_per_run = 40_000
+    # Estimated, not exact. Measured: a run that only planned and replanned,
+    # calling no tools, cost 5,446 tokens. Every executor step adds the eight
+    # tool schemas plus the accumulated findings again, and a full itinerary
+    # runs three to five such steps - so tens of thousands is the right order.
+    # Treat this as a planning figure; `total_tokens` on each chat response
+    # reports what a request actually cost.
+    cost_per_run = 35_000
     print(
         f"\n  Combined budget: {total_tpm:,} tokens/minute across {len(keys)} key(s)."
     )
-    print(f"  A full itinerary costs roughly {cost_per_run:,} tokens.")
+    print(f"  A full itinerary costs roughly {cost_per_run:,} tokens (estimate;")
+    print("  each chat response reports its real cost as `total_tokens`).")
 
     if total_tpm >= cost_per_run * 2:
         print("  -> Comfortable: several itineraries per minute.")

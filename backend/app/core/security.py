@@ -24,6 +24,11 @@ we expect are permitted.
 **Never trust a role claim from the token.** A JWT can carry arbitrary custom
 claims. The admin check reads `profiles.app_role` from the database, which
 only the service role can write.
+
+One practical detail that is easy to omit and expensive to debug: verification
+allows 60 seconds of **clock skew**. Without it, a token issued seconds ago is
+rejected as "not yet valid" whenever this server's clock trails the auth
+server's, producing sporadic 401s for perfectly valid credentials.
 """
 
 from __future__ import annotations
@@ -49,6 +54,20 @@ ALLOWED_ALGORITHMS: Final[list[str]] = ["ES256", "RS256"]
 # lookup is effectively free, short enough that a rotated key is picked up
 # without a redeploy.
 JWKS_CACHE_SECONDS: Final[int] = 600
+
+# Tolerance for clock skew between this server and Supabase's auth server.
+#
+# Not optional. Without it, a token issued a moment ago is rejected with "the
+# token is not yet valid (iat)" whenever the local clock is even slightly
+# behind the issuer's - which was reproduced on a normal developer machine, and
+# is guaranteed to happen intermittently across separately-synchronised
+# machines in production. The symptom is the worst kind: sporadic 401s for
+# valid credentials that vanish on retry.
+#
+# 60 seconds is the conventional allowance. It applies to `exp` as well, so the
+# cost is that a token stays usable for up to a minute past expiry - negligible
+# against tokens that are valid for an hour.
+CLOCK_SKEW_LEEWAY_SECONDS: Final[int] = 60
 
 
 class TokenVerifier:
@@ -118,6 +137,8 @@ class TokenVerifier:
                 # Pinned, not read from the token header.
                 algorithms=ALLOWED_ALGORITHMS,
                 audience=self.settings.supabase_jwt_audience,
+                # Absorbs clock drift between this server and the issuer.
+                leeway=CLOCK_SKEW_LEEWAY_SECONDS,
                 options={
                     "verify_signature": True,
                     "verify_exp": True,

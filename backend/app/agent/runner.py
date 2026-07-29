@@ -41,6 +41,7 @@ from app.core.logging import bind_request_context, get_logger
 from app.db.repositories import SessionRepository, TraceRepository
 from app.memory.service import MemoryService
 from app.rag.retriever import MultiHopRetriever
+from app.services.usage import TokenUsage, start_metering, stop_metering
 from app.tools.base import ToolCallRecord, start_recording, stop_recording
 from app.tools.context import ToolContext, reset_tool_context, set_tool_context
 
@@ -80,6 +81,9 @@ class TurnResult:
     replan_count: int = 0
     tool_calls: list[ToolCallRecord] = None  # type: ignore[assignment]
     latency_ms: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    token_breakdown: list[dict[str, object]] = None  # type: ignore[assignment]
     user_message_id: str | None = None
     assistant_message_id: str | None = None
 
@@ -89,6 +93,8 @@ class TurnResult:
             self.plan = []
         if self.tool_calls is None:
             self.tool_calls = []
+        if self.token_breakdown is None:
+            self.token_breakdown = []
 
 
 class AgentRunner:
@@ -171,6 +177,7 @@ class AgentRunner:
                 logger.warning("runner.start_run_trace_failed", exc_info=True)
 
         records = start_recording()
+        meter: TokenUsage = start_metering()
         context_token = set_tool_context(
             ToolContext(
                 user_id=user_id,
@@ -194,6 +201,7 @@ class AgentRunner:
             # let the next request inherit this user's identity.
             reset_tool_context(context_token)
             stop_recording()
+            stop_metering()
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         response = final_state.get("final_response") or (
@@ -235,6 +243,9 @@ class AgentRunner:
             replan_count=final_state.get("replan_count", 0),
             tool_calls=list(records),
             latency_ms=latency_ms,
+            prompt_tokens=meter.prompt_tokens,
+            completion_tokens=meter.completion_tokens,
+            token_breakdown=meter.summary(),
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
         )
@@ -248,6 +259,8 @@ class AgentRunner:
             replans=result.replan_count,
             tool_calls=len(result.tool_calls),
             latency_ms=latency_ms,
+            total_tokens=meter.total_tokens,
+            llm_calls=meter.calls,
         )
         return result
 
@@ -326,6 +339,8 @@ class AgentRunner:
                 detected_language=result.detected_language,
                 latency_ms=result.latency_ms,
                 response_message_id=result.assistant_message_id,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
             )
             await self.traces.record_steps(result.run_id, state.get("completed_steps", []))
             await self.traces.record_tool_calls(result.run_id, result.tool_calls)

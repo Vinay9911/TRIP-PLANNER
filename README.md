@@ -16,8 +16,8 @@ POST /api/v1/chat
 
 - **Live API** — _deployment URL goes here once deployed_
 - **Interactive docs** — `/docs` (OpenAPI/Swagger, generated from the code)
-- **Technical document** — [ARCHITECTURE.md](ARCHITECTURE.md)
-- **Plain-language walkthrough** — [WORKFLOW.md](WORKFLOW.md)
+- **Technical document** — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **Plain-language walkthrough** — [docs/WORKFLOW.md](docs/WORKFLOW.md)
 - **How to run and verify it yourself** — [docs/TESTING.md](docs/TESTING.md)
 
 ---
@@ -123,8 +123,8 @@ graph LR
     F -.writes.-> M
 ```
 
-Full detail in [ARCHITECTURE.md](ARCHITECTURE.md); a non-technical narration in
-[WORKFLOW.md](WORKFLOW.md).
+Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); a non-technical narration in
+[docs/WORKFLOW.md](docs/WORKFLOW.md).
 
 ---
 

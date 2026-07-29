@@ -135,6 +135,7 @@ async def chat(
         steps_executed=result.steps_executed,
         replan_count=result.replan_count,
         latency_ms=result.latency_ms,
+        total_tokens=result.prompt_tokens + result.completion_tokens,
     )
 
 

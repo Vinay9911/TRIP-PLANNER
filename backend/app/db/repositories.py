@@ -246,6 +246,8 @@ class TraceRepository:
         response_message_id: str | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
     ) -> None:
         """Record the completion of an agent run."""
         plan_json = [step.model_dump() for step in initial_plan]
@@ -264,6 +266,8 @@ class TraceRepository:
                        response_message_id = %s,
                        error_code          = %s,
                        error_message       = %s,
+                       prompt_tokens       = %s,
+                       completion_tokens   = %s,
                        finished_at         = now()
                  where id = %s
                 """,
@@ -278,6 +282,8 @@ class TraceRepository:
                     response_message_id,
                     error_code,
                     error_message,
+                    prompt_tokens,
+                    completion_tokens,
                     run_id,
                 ),
             )
@@ -607,7 +613,10 @@ class AdminRepository:
                        percentile_disc(0.95) within group (order by latency_ms)
                                                                          as p95_latency_ms,
                        round(avg(replan_count), 2)                       as avg_replans,
-                       round(avg(rag_hops), 2)                           as avg_rag_hops
+                       round(avg(rag_hops), 2)                           as avg_rag_hops,
+                       round(avg(prompt_tokens + completion_tokens))      as avg_tokens_per_run,
+                       max(prompt_tokens + completion_tokens)             as max_tokens_per_run,
+                       sum(prompt_tokens + completion_tokens)             as total_tokens
                   from public.agent_runs
                  where started_at > now() - make_interval(days => %s)
                 """,
