@@ -21,7 +21,7 @@ In between, the system does nine things:
 1. Checks who is asking
 2. Remembers what it already knows about them
 3. Works out what they actually want
-4. Decides whether it needs to ask a question first
+4. Decides: ask a question, talk it through, or get straight to work
 5. Writes a plan
 6. Carries out the plan, one step at a time, using tools
 7. Checks after each step whether the plan still makes sense
@@ -106,30 +106,64 @@ works for any language, and we come back to it in Step 8.
 
 ---
 
-## Step 4 — Should it ask a question first?
+## Step 4 — Question, conversation, or straight to work?
 
-The system now decides: is this clear enough to plan well, or should it ask
-something?
+The system now picks one of **three gears**, not two. This is the part of the
+design that changed the most after watching a real transcript go wrong: a
+message as short as *"I want to go to Kerala"* used to fall straight into the
+full nine-step pipeline below and come back with a complete two-day itinerary
+for districts the traveller had never chosen — impressively fast, and not
+what anyone actually asked for. A travel agent handed that sentence talks to
+you first.
 
-**It is deliberately reluctant to ask.** An assistant that interrogates you
-before every request is worse than one that makes a sensible assumption and
-tells you what it assumed. The rule:
+**Gear 1 — ask a question.** Reserved for when planning would genuinely be
+wasted otherwise: no destination at all, or a requirement so ambiguous that
+guessing wrong ruins the whole itinerary. *"I want to go somewhere nice"* gets
+*"Which city or country did you have in mind?"* and stops there.
 
-- **Worth asking about:** no destination at all, or a requirement so ambiguous
-  that guessing wrong wastes the whole itinerary.
-- **Not worth asking about:** missing dates. Assume the near future, say so,
-  and let them correct it.
+**Gear 2 — talk it through.** A destination is named, but the trip itself
+isn't shaped yet — no length, no timing, nothing to plan against. Rather than
+either interrogating the traveller or guessing a whole itinerary for them, the
+system does one lightweight lookup (real districts and areas for that place,
+the same source the full plan uses — nothing invented) and replies with a
+handful of genuinely different ways to experience it, plus at most two
+questions:
 
-**And it never asks about something it already knows.** This is why Step 2
-happens before Step 4. If the two were built separately, the system would ask
-*"what's your budget?"* to someone who answered that three conversations ago —
-exactly the annoyance that remembering people is supposed to eliminate.
+> *"i want to go to kerala"* →
+> *"You could chase the backwaters around Alappuzha 🌴, the tea hills near
+> Munnar 🏔️, or the old streets of Fort Kochi 🏛️ — how many days do you have,
+> and what matters most: nature, food, or culture? Say 'just plan it' any time
+> and I'll build the full plan."*
 
-**Result for our example:** clear enough. Kyoto, 2 days, relaxed, vegetarian.
-Carry on.
+This costs a fraction of a full plan — one lookup and one reply, not nine
+steps — and it's what makes the toggles described in Step 6 discoverable: the
+system mentions, once, that it can also check weather, compare flights, and
+find restaurants and attractions once the trip has some shape.
 
-*(Had they typed just "I want to go somewhere nice", it would have replied
-"Which city or country did you have in mind?" and stopped there.)*
+**Gear 3 — get straight to work.** This is what our worked example gets,
+and it's worth being precise about *why*, because two different signals both
+lead here on their own:
+
+- **The trip is already specified.** A length plus some sense of timing is
+  enough — exact dates are not required, "early October" counts.
+- **The words themselves are a command, not just interest.** *"Plan me 2
+  relaxed days in Kyoto"* opens with an imperative and already gives a
+  length — that is an instruction to build the trip, unlike *"I want to go to
+  Kerala"*, which is just naming a place. Once someone says *"just plan it"*
+  or accepts a proposed outline, gear 3 also stays selected for the rest of
+  that conversation, so a later edit like *"make day 2 lighter"* refines the
+  plan instead of restarting the conversation in Step 4.
+
+**Whichever gear runs, it never asks about something it already knows.** This
+is why Step 2 happens before Step 4, and why what a conversation has already
+established (destination, days, who's coming) is never asked twice either. If
+the two were built separately, the system would ask *"what's your budget?"*
+to someone who answered that three conversations ago — exactly the annoyance
+that remembering people is supposed to eliminate.
+
+**Result for our example:** *"Plan me 2 relaxed days in Kyoto. I'm
+vegetarian"* is both specified (a length) and a command (the verb "Plan me").
+Gear 3. Straight to Step 5.
 
 ---
 
@@ -177,6 +211,14 @@ It then picks its own tools. It has eight:
 mentions weather, check the weather." It is given a description of each tool
 and chooses. Ask *"will I need an umbrella?"* and it checks weather only. Ask
 for a full itinerary and it uses four or five.
+
+**One exception, and it's a deliberate one.** The chat screen has toggles for
+Flights / Attractions / Stays / Restaurants. Switch one off and it isn't a
+hint — the tool for it is physically removed from the list above before the
+system ever sees the request, the same way the memory tools disappear
+entirely for someone who's turned memory off. Someone who only wants a
+walking itinerary can switch off Flights and Stays and never get a flight
+suggestion, however good an idea the model might otherwise think it is.
 
 ### What the travel guide tool does — the clever part
 

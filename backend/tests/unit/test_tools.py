@@ -381,6 +381,33 @@ def test_memory_tools_can_be_withheld_for_opted_out_users():
     assert "search_travel_guide" in names
 
 
+def test_switching_off_a_service_removes_its_tool():
+    """A composer toggle is a guarantee, not a suggestion: the tool is gone."""
+    names = {tool.name for tool in get_tools(focus=["attractions", "restaurants"])}
+
+    assert "search_flights" not in names
+    assert "search_accommodation" not in names
+    assert "search_travel_guide" in names
+    assert "find_places" in names
+
+
+def test_no_focus_means_the_full_toolbox():
+    assert {t.name for t in get_tools(focus=None)} == {t.name for t in get_tools()}
+
+
+def test_shared_tools_survive_attraction_and_restaurant_toggles():
+    """Attraction/restaurant toggles must not amputate shared tools.
+
+    Those services share find_places with everything else, so their scoping
+    is enforced in prompts instead of by tool removal.
+    """
+    names = {tool.name for tool in get_tools(focus=["flights", "stays"])}
+
+    assert "find_places" in names
+    assert "search_travel_guide" in names
+    assert "search_flights" in names
+
+
 def test_no_hardcoded_keyword_routing_exists():
     """Structural check for the pattern the brief explicitly forbids.
 

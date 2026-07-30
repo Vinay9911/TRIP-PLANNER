@@ -65,9 +65,15 @@ async def chat(
 
     The agent decides for itself which tools to use, plans multi-step work,
     applies preferences remembered from previous conversations, and replies in
-    the language the message was written in. If the request is too vague to
-    plan well it asks one short clarifying question instead of guessing -
-    indicated by `needs_clarification` and a `clarifying` status.
+    the language the message was written in.
+
+    It runs in one of three gears, reported as `mode`: a request too vague to
+    act on gets one short clarifying question (`clarify`); a named destination
+    without a specified trip gets grounded suggestions, a draft outline and at
+    most two questions (`advise`); a specified trip - or an explicit "just
+    plan it" - runs the full plan-execute pipeline (`plan`). The conversation's
+    gathered details are returned as `trip_state`, and the `focus` field lets
+    a client switch flights / attractions / stays / restaurants on and off.
 
     Args:
         payload: The message and optional session id.
@@ -92,10 +98,21 @@ async def chat(
 
     bind_request_context(user_id=user.id, session_id=session_id)
 
+    # The slot ledger survives across turns in the session row; the focus
+    # selection travels with each request when the user touches the toggles,
+    # and falls back to what the conversation last used when they do not -
+    # so a toggle set once holds for the whole conversation, on any device.
+    trip_state = dict(session.get("trip_state") or {})
+    focus = payload.focus if payload.focus is not None else trip_state.get("focus")
+    if payload.focus is not None:
+        trip_state["focus"] = list(payload.focus)
+
     result = await runner.run_turn(  # type: ignore[attr-defined]
         user_id=user.id,
         session_id=session_id,
         message=payload.message,
+        trip_state=trip_state,
+        focus=focus,
     )
 
     # Respect the memory opt-out by not scheduling extraction at all, rather
@@ -117,6 +134,8 @@ async def chat(
         run_id=result.run_id,
         response=result.response,
         status=result.status,  # type: ignore[arg-type]
+        mode=result.mode,  # type: ignore[arg-type]
+        trip_state=result.trip_state,
         needs_clarification=result.needs_clarification,
         detected_language=result.detected_language,
         destination=result.destination,

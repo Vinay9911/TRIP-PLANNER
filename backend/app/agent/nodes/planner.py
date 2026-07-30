@@ -104,8 +104,37 @@ async def planner_node(state: AgentState, *, settings: Settings | None = None) -
         context_lines.append(
             f"DATES: {state['start_date']} to {state.get('end_date') or state['start_date']}"
         )
+
+    trip_state = state.get("trip_state") or {}
+    if trip_state.get("origin"):
+        # Origin is what makes a logistics step plannable at all. Stated
+        # explicitly so a full trip plan includes flights when they are
+        # wanted, instead of the tools sitting unused because no step ever
+        # had a departure city to work with.
+        context_lines.append(
+            f"TRAVELLING FROM: {trip_state['origin']} - include a logistics step "
+            "(flights, and a place to stay) when planning a full trip, unless "
+            "those services are switched off below."
+        )
+    if trip_state.get("duration_days"):
+        context_lines.append(f"TRIP LENGTH: {trip_state['duration_days']} days")
+    if not state.get("start_date") and trip_state.get("travel_window"):
+        context_lines.append(f"WHEN (approximate): {trip_state['travel_window']}")
+    if trip_state.get("priorities"):
+        context_lines.append("PRIORITIES: " + ", ".join(map(str, trip_state["priorities"])))
+
     if state.get("constraints"):
         context_lines.append("HARD REQUIREMENTS: " + "; ".join(state["constraints"]))
+
+    from app.agent.trip_state import disabled_services
+
+    switched_off = disabled_services(state.get("focus"))
+    if switched_off:
+        context_lines.append(
+            "SERVICES SWITCHED OFF BY THE TRAVELLER (plan no steps for these): "
+            + ", ".join(switched_off)
+        )
+
     if state.get("memory_block"):
         context_lines.append("\n" + state["memory_block"])
 

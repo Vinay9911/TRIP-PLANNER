@@ -332,7 +332,19 @@ ALL_TOOLS: list[BaseTool] = [
 ]
 
 
-def get_tools(*, include_memory: bool = True) -> list[BaseTool]:
+#: Which tool each composer service toggle removes when switched off. Only
+#: `flights` and `stays` appear here because they map 1:1 to a tool;
+#: `attractions` and `restaurants` share `find_places` and
+#: `search_travel_guide` with everything else, so switching those off is
+#: enforced through prompt instructions rather than by amputating a tool the
+#: remaining services still need.
+_TOOL_FOR_SERVICE = {
+    "flights": "search_flights",
+    "stays": "search_accommodation",
+}
+
+
+def get_tools(*, include_memory: bool = True, focus: list[str] | None = None) -> list[BaseTool]:
     """Return the tools available to the agent.
 
     Args:
@@ -340,15 +352,28 @@ def get_tools(*, include_memory: bool = True) -> list[BaseTool]:
             users who have opted out of long-term memory - removing the tools
             entirely is a stronger guarantee than instructing the model not to
             use them.
+        focus: Services the traveller has enabled in the UI. None means all.
+            A switched-off service's tool is removed for the same reason the
+            memory tools are: absence is a guarantee, an instruction is a
+            request.
 
     Returns:
         The tool list to pass to the executor.
     """
-    if include_memory:
-        return list(ALL_TOOLS)
+    excluded: set[str] = set()
 
-    memory_tool_names = {"recall_user_preferences", "save_user_preference"}
-    return [tool_ for tool_ in ALL_TOOLS if tool_.name not in memory_tool_names]
+    if not include_memory:
+        excluded.update({"recall_user_preferences", "save_user_preference"})
+
+    if focus is not None:
+        enabled = {service.strip().lower() for service in focus}
+        excluded.update(
+            tool_name for service, tool_name in _TOOL_FOR_SERVICE.items() if service not in enabled
+        )
+
+    if not excluded:
+        return list(ALL_TOOLS)
+    return [tool_ for tool_ in ALL_TOOLS if tool_.name not in excluded]
 
 
 def get_tool_names() -> list[str]:

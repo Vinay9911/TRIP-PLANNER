@@ -5,14 +5,17 @@
  * Colours are defined once here so light and dark stay in step and a change
  * of accent does not mean editing thirty files.
  */
+/* Warm palette: sunset coral on cream, after the travel-app look the client
+   pointed at. The accent leans orange rather than red so the danger colour
+   still reads as distinct. */
 @theme {
-  --color-ink: #101418;
-  --color-ink-soft: #4a5560;
-  --color-paper: #fbfaf8;
+  --color-ink: #221a14;
+  --color-ink-soft: #6b5d52;
+  --color-paper: #fdf9f4;
   --color-surface: #ffffff;
-  --color-line: #e6e2dc;
-  --color-accent: #1f6f5c;
-  --color-accent-soft: #e8f2ef;
+  --color-line: #efe4d8;
+  --color-accent: #d96c2f;
+  --color-accent-soft: #fdeee1;
   --color-warn: #a8641f;
   --color-danger: #a8342b;
 
@@ -23,13 +26,13 @@
 
 @media (prefers-color-scheme: dark) {
   @theme {
-    --color-ink: #eceef0;
-    --color-ink-soft: #9aa5b1;
-    --color-paper: #14171a;
-    --color-surface: #1c2024;
-    --color-line: #2c3238;
-    --color-accent: #5fbfa5;
-    --color-accent-soft: #17302a;
+    --color-ink: #f2ece5;
+    --color-ink-soft: #b0a294;
+    --color-paper: #171310;
+    --color-surface: #201a16;
+    --color-line: #362c24;
+    --color-accent: #eb9257;
+    --color-accent-soft: #3a2617;
   }
 }
 

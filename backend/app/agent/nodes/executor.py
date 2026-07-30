@@ -100,7 +100,7 @@ async def executor_node(
     prompt = _build_step_prompt(state, step)
 
     try:
-        output = await _run_step_agent(prompt, cfg)
+        output = await _run_step_agent(prompt, cfg, focus=state.get("focus"))
         succeeded, error = True, None
 
     except TimeoutError:
@@ -176,7 +176,7 @@ def _seconds_until_a_key_frees(pool: object) -> float:
     )
 
 
-async def _run_step_agent(prompt: str, cfg: Settings) -> str:
+async def _run_step_agent(prompt: str, cfg: Settings, *, focus: list[str] | None = None) -> str:
     """Run one step through a `create_agent` instance, rotating keys on 429.
 
     `create_agent` owns its internal tool-calling loop and holds whichever key
@@ -187,6 +187,8 @@ async def _run_step_agent(prompt: str, cfg: Settings) -> str:
     Args:
         prompt: The step instruction.
         cfg: Application settings.
+        focus: Services the traveller enabled; a switched-off service's tool
+            is withheld from the model entirely.
 
     Returns:
         The executor's textual findings.
@@ -215,7 +217,7 @@ async def _run_step_agent(prompt: str, cfg: Settings) -> str:
 
         agent = create_agent(
             model=get_model(ModelRole.EXECUTOR, settings=cfg),
-            tools=get_tools(),
+            tools=get_tools(focus=focus),
             system_prompt=EXECUTOR_PROMPT,
         )
 
@@ -267,14 +269,45 @@ def _build_step_prompt(state: AgentState, step: PlanStep) -> str:
 
     if state.get("destination"):
         sections.append(f"DESTINATION: {state['destination']}")
+
+    trip_state = state.get("trip_state") or {}
     if state.get("start_date"):
         sections.append(
             f"DATES: {state['start_date']} to {state.get('end_date') or state['start_date']}"
         )
+    elif trip_state.get("travel_window"):
+        # Without this, a model holding only the traveller's phrase passes it
+        # verbatim into date-taking tools - a live run showed 'early October'
+        # submitted as `start_date` eight times. Giving it today's date and an
+        # explicit instruction makes the conversion its job, once.
+        from datetime import date
+
+        sections.append(
+            f"WHEN: {trip_state['travel_window']} (no exact dates given - today is "
+            f"{date.today().isoformat()}; resolve this to concrete YYYY-MM-DD dates "
+            "yourself before calling any tool that takes dates)"
+        )
+    if trip_state.get("origin"):
+        sections.append(f"TRAVELLING FROM: {trip_state['origin']}")
+    if trip_state.get("duration_days"):
+        sections.append(f"TRIP LENGTH: {trip_state['duration_days']} days")
     if state.get("constraints"):
         sections.append(
             "HARD REQUIREMENTS (pass these to tools as filters): " + "; ".join(state["constraints"])
         )
+
+    # Attractions/restaurants share find_places with everything else, so
+    # switching them off cannot remove a tool - it becomes an instruction
+    # here instead. Flights/stays are additionally enforced by tool removal.
+    from app.agent.trip_state import disabled_services
+
+    switched_off = disabled_services(state.get("focus"))
+    if switched_off:
+        sections.append(
+            "SERVICES THE TRAVELLER SWITCHED OFF (do not research, search for, "
+            "or recommend these): " + ", ".join(switched_off)
+        )
+
     if state.get("memory_block"):
         sections.append(state["memory_block"])
 

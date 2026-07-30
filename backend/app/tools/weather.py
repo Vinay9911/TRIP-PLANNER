@@ -131,14 +131,22 @@ def _parse_date(value: str, field: str) -> date:
 
     Raises:
         ToolExecutionError: If the value is not an ISO date. The message tells
-            the model the exact expected format so it can retry correctly.
+            the model the exact expected format AND tells it to resolve vague
+            phrases itself. The second half was added after a live run where
+            the model passed the traveller's own words ('early October') as
+            `start_date` eight times in a row - the format hint alone told it
+            what an ISO date looks like, but not that converting the phrase
+            was its job, so it kept resubmitting variations of the phrase.
     """
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc:
         raise ToolExecutionError(
             f"The `{field}` argument must be an ISO date formatted as YYYY-MM-DD "
-            f"(for example 2026-08-14). Received: {value!r}.",
+            f"(for example 2026-08-14). Received: {value!r}. If you only know a "
+            f"rough time like 'early October', resolve it to concrete dates "
+            f"yourself (today is {date.today().isoformat()}) and call once with "
+            "those - do not resubmit the phrase.",
             tool_name="get_weather_forecast",
         ) from exc
 

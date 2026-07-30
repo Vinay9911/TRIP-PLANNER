@@ -32,6 +32,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from app.agent.state import AgentState
+from app.agent.trip_state import decide_mode, merge_trip_state
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
@@ -42,7 +43,15 @@ logger = get_logger(__name__)
 
 
 class Understanding(BaseModel):
-    """Structured reading of the traveller's request."""
+    """Structured reading of the traveller's request.
+
+    Beyond the goal and language, this extracts the *slots* that drive the
+    three-gear conversation (see `app/agent/trip_state.py`): the model's job
+    here is pure extraction - "does this message state a duration?" - while
+    the decision of whether to clarify, advise or plan is made in code from
+    what was extracted. Keeping judgement out of the model keeps the routing
+    deterministic and testable.
+    """
 
     goal: str = Field(
         description=(
@@ -78,6 +87,67 @@ class Understanding(BaseModel):
             "Do not repeat requirements already listed as known."
         ),
     )
+    origin: str | None = Field(
+        default=None,
+        description=(
+            "City the traveller will travel FROM, if stated in this message or "
+            "listed among the known preferences (their home city). Null otherwise."
+        ),
+    )
+    duration_days: int | None = Field(
+        default=None,
+        ge=1,
+        le=90,
+        description="Trip length in days when stated ('5 days', 'a week' = 7). Null otherwise.",
+    )
+    travel_window: str | None = Field(
+        default=None,
+        max_length=60,
+        description=(
+            "Rough timing in the traveller's words when exact dates are absent, "
+            "e.g. 'early October', 'next summer'. Null if dates were resolved or "
+            "nothing was said."
+        ),
+    )
+    party: str | None = Field(
+        default=None,
+        max_length=60,
+        description="Who is travelling when stated, e.g. 'couple', 'family with two kids'.",
+    )
+    budget_tier: str | None = Field(
+        default=None,
+        description="One of 'budget', 'mid-range', 'luxury' when stated or clearly implied.",
+    )
+    priorities: list[str] = Field(
+        default_factory=list,
+        description=(
+            "What matters most for this trip, stated in THIS message, as short "
+            "phrases, e.g. ['backwaters', 'food', 'quiet places']."
+        ),
+    )
+    wants_full_plan: bool = Field(
+        default=False,
+        description=(
+            "True when the traveller's own words are a command to build the "
+            "trip, not just an expression of interest in a place. Two patterns "
+            "both count: an explicit shortcut ('just plan it', 'surprise me') "
+            "AND an imperative planning request that already gives at least a "
+            "duration ('Plan me 2 days in Kyoto', 'Build me a 5-day Kerala "
+            "itinerary') - the verb 'plan/build/make me' plus a length is "
+            "already a command, even with no exact dates. False for a bare "
+            "destination mention ('I want to go to Kerala', 'thinking about "
+            "Vietnam') - that is interest, not a command, however enthusiastic."
+        ),
+    )
+    scoped_service: str = Field(
+        default="none",
+        description=(
+            "Set when the message asks for ONE specific service rather than trip "
+            "planning: 'flights' ('flights to Tokyo in November'), 'stays' "
+            "('find me a hotel in Kochi'), 'restaurants', 'attractions', or "
+            "'weather'. Use 'none' when they are planning or discussing a trip."
+        ),
+    )
     needs_clarification: bool = Field(
         default=False,
         description=(
@@ -87,10 +157,12 @@ class Understanding(BaseModel):
     )
     clarifying_question: str | None = Field(
         default=None,
-        max_length=300,
+        max_length=400,
         description=(
-            "One short, friendly question, asking at most two things. Written in the "
-            "traveller's own language. Null when no clarification is needed."
+            "One short, warm question, asking at most two things, written in the "
+            "traveller's own language. Offer two or three concrete example options "
+            "to pick from rather than an open-ended blank, and one or two fitting "
+            "emoji are welcome. Null when no clarification is needed."
         ),
     )
 
@@ -100,6 +172,18 @@ You are the intake step of a travel planning agent. Read the traveller's \
 message and produce a structured reading of it.
 
 TODAY'S DATE IS {today}. Resolve every relative date against it.
+
+SLOT EXTRACTION
+Fill origin, duration_days, travel_window, party, budget_tier and priorities \
+from what THIS message states, plus anything in the known-preferences list \
+that applies (their home city fills origin, for example). Extract only - do \
+not guess a slot the traveller has not given you. Slots already listed under \
+KNOWN TRIP DETAILS are settled; leave them null here unless this message \
+changes them.
+
+Set wants_full_plan only for an explicit request or a clear acceptance of a \
+proposed outline. Set scoped_service when they want one specific thing \
+(flights, a hotel, restaurants, attractions, weather) rather than a trip.
 
 WHEN TO ASK A CLARIFYING QUESTION
 Ask only when planning would be impossible or wasted without an answer:
@@ -127,7 +211,7 @@ LANGUAGE
 Detect the language of their message and record it. It sets the reply \
 language. Your `goal` field stays in English regardless - it is for internal \
 planning - but `clarifying_question` must be in their language.
-{memory_section}\
+{trip_section}{memory_section}\
 """
 
 
@@ -179,6 +263,9 @@ async def understand_node(
             + "\n".join(f"- {fact}" for fact in known_facts)
         )
 
+    trip_state = dict(state.get("trip_state") or {})
+    trip_section = _trip_section(trip_state)
+
     # --- Interpret ---------------------------------------------------------
     history = _recent_exchange(state)
 
@@ -188,7 +275,9 @@ async def understand_node(
             [
                 SystemMessage(
                     content=UNDERSTANDING_PROMPT.format(
-                        today=date.today().isoformat(), memory_section=memory_section
+                        today=date.today().isoformat(),
+                        trip_section=trip_section,
+                        memory_section=memory_section,
                     )
                 ),
                 HumanMessage(content=f"{history}\n\nLATEST MESSAGE:\n{latest}"),
@@ -203,6 +292,8 @@ async def understand_node(
         # planner can still work from the raw message.
         return AgentState(
             goal=latest,
+            mode="plan",
+            trip_state=trip_state,
             memory_block=memory_block,
             memory_ids=memory_ids,
             detected_language="en",
@@ -215,20 +306,59 @@ async def understand_node(
     # case-insensitively while keeping the original casing for display.
     merged_constraints = _merge_constraints(remembered_constraints, understanding.constraints)
 
+    # Fold this turn's extracted slots into the conversation's ledger. The
+    # merge never lets absence erase: a follow-up that mentions no duration
+    # keeps the duration established two turns ago.
+    trip_state = merge_trip_state(
+        trip_state,
+        {
+            "destination": understanding.destination,
+            "origin": understanding.origin,
+            "duration_days": understanding.duration_days,
+            "travel_window": understanding.travel_window,
+            "start_date": understanding.start_date,
+            "end_date": understanding.end_date,
+            "party": understanding.party,
+            "budget_tier": understanding.budget_tier,
+            "priorities": understanding.priorities,
+        },
+    )
+
+    # A destination that survives from an earlier turn still counts: "5 days,
+    # mostly backwaters" names no destination but continues the Kerala thread.
+    effective_destination = understanding.destination or trip_state.get("destination")
+
+    mode = decide_mode(
+        needs_clarification=understanding.needs_clarification,
+        destination=effective_destination,
+        wants_full_plan=understanding.wants_full_plan,
+        scoped_service=understanding.scoped_service,
+        trip_state=trip_state,
+    )
+
+    # Confirmation is sticky: once the traveller asks for the full plan, every
+    # later turn is a refinement, not a fresh round of advice.
+    if mode == "plan" and not understanding.needs_clarification:
+        trip_state["outline_confirmed"] = True
+
     logger.info(
         "agent.understood",
-        destination=understanding.destination,
+        destination=effective_destination,
+        mode=mode,
         language=understanding.detected_language,
         needs_clarification=understanding.needs_clarification,
+        scoped_service=understanding.scoped_service,
         constraints=len(merged_constraints),
         known_facts=len(known_facts),
     )
 
     update = AgentState(
         goal=understanding.goal,
-        destination=understanding.destination,
-        start_date=understanding.start_date,
-        end_date=understanding.end_date,
+        mode=mode,
+        trip_state=trip_state,
+        destination=effective_destination,
+        start_date=understanding.start_date or trip_state.get("start_date"),
+        end_date=understanding.end_date or trip_state.get("end_date"),
         detected_language=understanding.detected_language,
         constraints=merged_constraints,
         memory_block=memory_block,
@@ -242,6 +372,46 @@ async def understand_node(
         update["final_response"] = understanding.clarifying_question
 
     return update
+
+
+def _trip_section(trip_state: dict[str, object]) -> str:
+    """Render the already-settled slots for the understanding prompt.
+
+    Shown so the model neither re-extracts nor re-asks what a previous turn
+    established - the same never-ask-twice rule the memory section enforces,
+    applied to this conversation's own slots.
+
+    Args:
+        trip_state: The persisted slot ledger.
+
+    Returns:
+        A prompt section, or an empty string on a fresh conversation.
+    """
+    labels = (
+        ("destination", "destination"),
+        ("origin", "travelling from"),
+        ("duration_days", "trip length in days"),
+        ("travel_window", "when"),
+        ("start_date", "start date"),
+        ("end_date", "end date"),
+        ("party", "party"),
+        ("budget_tier", "budget"),
+        ("priorities", "priorities"),
+    )
+    lines = []
+    for key, label in labels:
+        value = trip_state.get(key)
+        if value:
+            rendered = ", ".join(map(str, value)) if isinstance(value, list) else str(value)
+            lines.append(f"- {label}: {rendered}")
+
+    if not lines:
+        return ""
+    return (
+        "\n\nKNOWN TRIP DETAILS, settled earlier in this conversation. Do not "
+        "ask about these and leave their slots null unless this message "
+        "changes them:\n" + "\n".join(lines)
+    )
 
 
 def _recent_exchange(state: AgentState, limit: int = 6) -> str:

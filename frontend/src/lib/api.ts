@@ -21,6 +21,30 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 export type RunStatus = "completed" | "clarifying" | "partial" | "failed";
 export type ToolStatus = "ok" | "degraded" | "invalid";
 
+/** Which gear the agent ran in for a turn. */
+export type AgentMode = "clarify" | "advise" | "plan";
+
+/** Services the traveller can switch on and off in the composer. */
+export type FocusService = "flights" | "stays" | "attractions" | "restaurants";
+
+/**
+ * The conversation's slot ledger: what the agent has gathered about the trip
+ * so far. Keys mirror backend/app/agent/trip_state.py.
+ */
+export interface TripState {
+  destination?: string;
+  origin?: string;
+  duration_days?: number;
+  travel_window?: string;
+  start_date?: string;
+  end_date?: string;
+  party?: string;
+  budget_tier?: string;
+  priorities?: string[];
+  outline_confirmed?: boolean;
+  [key: string]: unknown;
+}
+
 export interface PlanStep {
   description: string;
   kind: string;
@@ -38,6 +62,8 @@ export interface ChatResponse {
   run_id: string;
   response: string;
   status: RunStatus;
+  mode: AgentMode;
+  trip_state: TripState;
   needs_clarification: boolean;
   detected_language: string;
   destination: string | null;
@@ -177,10 +203,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export const api = {
-  chat: (message: string, sessionId?: string) =>
+  chat: (message: string, sessionId?: string, focus?: FocusService[]) =>
     request<ChatResponse>("/api/v1/chat", {
       method: "POST",
-      body: JSON.stringify({ message, session_id: sessionId ?? null }),
+      body: JSON.stringify({
+        message,
+        session_id: sessionId ?? null,
+        // A switched-off service is genuinely withheld from the agent - its
+        // tool is removed and the planner is told not to plan work for it.
+        focus: focus ?? null,
+      }),
     }),
 
   listSessions: () => request<SessionSummary[]>("/api/v1/sessions"),

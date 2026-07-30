@@ -34,6 +34,16 @@ class ChatRequest(BaseModel):
             "the agent keeps context."
         ),
     )
+    focus: list[Literal["flights", "stays", "attractions", "restaurants"]] | None = Field(
+        default=None,
+        description=(
+            "Services the traveller has switched ON in the composer. Omit (or "
+            "null) to leave the conversation's existing selection unchanged - "
+            "everything on for a new conversation. A switched-off service is "
+            "genuinely withheld from the agent: its tool is removed and the "
+            "planner is told not to plan work for it."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -45,6 +55,11 @@ class ChatRequest(BaseModel):
                 {
                     "message": "Make day two lighter, we'll be tired.",
                     "session_id": "3f2a...",
+                },
+                {
+                    "message": "5 days in Kerala, mostly backwaters.",
+                    "session_id": "3f2a...",
+                    "focus": ["attractions", "restaurants", "stays"],
                 },
             ]
         }
@@ -79,6 +94,22 @@ class ChatResponse(BaseModel):
     run_id: str = Field(description="Look up the full execution trace with this.")
     response: str = Field(description="The reply, in the traveller's language.")
     status: Literal["completed", "clarifying", "partial", "failed"]
+    mode: Literal["clarify", "advise", "plan"] = Field(
+        default="plan",
+        description=(
+            "Which gear this turn ran in: 'clarify' asked a question, 'advise' "
+            "offered grounded options and gathered trip details, 'plan' ran the "
+            "full plan-execute pipeline."
+        ),
+    )
+    trip_state: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "The conversation's slot ledger after this turn - destination, "
+            "origin, duration, priorities, and which services are in focus. "
+            "What a client renders as the trip panel."
+        ),
+    )
     needs_clarification: bool = Field(
         description="True when the reply is a question rather than an itinerary."
     )

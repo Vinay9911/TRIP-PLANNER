@@ -41,6 +41,7 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
+from app.agent.nodes.advisor import advisor_node
 from app.agent.nodes.executor import executor_node
 from app.agent.nodes.planner import planner_node
 from app.agent.nodes.replanner import replanner_node, route_after_replan
@@ -50,6 +51,7 @@ from app.agent.state import AgentState
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.memory.service import MemoryService
+from app.rag.retriever import MultiHopRetriever
 from app.tools.base import ToolCallRecord
 
 logger = get_logger(__name__)
@@ -66,30 +68,40 @@ class AgentDependencies:
     Attributes:
         memory_service: Long-term memory access, or None to run without
             personalisation.
+        retriever: Multi-hop retriever, used directly by the advisor node for
+            its one-hop orientation. The executor's tools reach the retriever
+            through the tool context instead; the advisor takes it here
+            because it is a node, not a tool, and must not depend on tool
+            plumbing to run.
         settings: Application settings.
     """
 
     memory_service: MemoryService | None = None
+    retriever: MultiHopRetriever | None = None
     settings: Settings | None = None
 
 
-def route_after_understand(state: AgentState) -> Literal["plan", "respond"]:
-    """Send an underspecified request straight to the responder.
+def route_after_understand(state: AgentState) -> Literal["plan", "advise", "respond"]:
+    """Route by the gear the understanding step decided on.
 
-    Skipping planning entirely when a clarifying question is needed is what
-    makes clarification cheap: one model call, not a full plan-execute cycle
-    that gets discarded.
+    Clarification skips planning entirely - one model call, not a
+    plan-execute cycle that gets discarded. Advice goes to the advisor node:
+    grounded options and at most two questions, at a fraction of full-plan
+    cost. Everything else runs the pipeline.
 
     Args:
         state: Current graph state.
 
     Returns:
-        `"respond"` to ask the question, `"plan"` to continue.
+        `"respond"` to ask a clarifying question, `"advise"` for an advisory
+        turn, `"plan"` to run the full pipeline.
     """
     if state.get("needs_clarification") and state.get("clarifying_question"):
         return "respond"
     if state.get("status") == "failed":
         return "respond"
+    if state.get("mode") == "advise":
+        return "advise"
     return "plan"
 
 
@@ -132,6 +144,9 @@ def build_graph(
             state, memory_service=dependencies.memory_service, settings=settings
         )
 
+    async def _advise(state: AgentState) -> AgentState:
+        return await advisor_node(state, retriever=dependencies.retriever, settings=settings)
+
     async def _plan(state: AgentState) -> AgentState:
         return await planner_node(state, settings=settings)
 
@@ -147,6 +162,7 @@ def build_graph(
     graph: StateGraph = StateGraph(AgentState)
 
     graph.add_node("understand", _understand)
+    graph.add_node("advise", _advise)
     graph.add_node("plan", _plan)
     graph.add_node("execute", _execute)
     graph.add_node("replan", _replan)
@@ -154,8 +170,14 @@ def build_graph(
 
     graph.add_edge(START, "understand")
     graph.add_conditional_edges(
-        "understand", route_after_understand, {"plan": "plan", "respond": "respond"}
+        "understand",
+        route_after_understand,
+        {"plan": "plan", "advise": "advise", "respond": "respond"},
     )
+    # The advisor composes its own reply - routing it through the responder
+    # would spend a second model call re-writing a message that is already
+    # in the traveller's language.
+    graph.add_edge("advise", END)
     graph.add_edge("plan", "execute")
     graph.add_conditional_edges(
         "execute", route_after_execute, {"replan": "replan", "respond": "respond"}

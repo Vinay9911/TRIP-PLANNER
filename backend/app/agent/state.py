@@ -115,6 +115,16 @@ class AgentState(TypedDict, total=False):
     # -- Understanding -----------------------------------------------------
     #: The traveller's request, restated as a single actionable goal.
     goal: str
+    #: Which gear this turn runs in - clarify, advise, or plan. Decided by
+    #: `trip_state.decide_mode` from extracted slots, never by the model
+    #: directly, so the routing is deterministic and testable.
+    mode: str
+    #: Per-conversation slot ledger (origin, duration, priorities, ...).
+    #: Loaded from `sessions.trip_state`, merged each turn, persisted back.
+    trip_state: dict[str, Any]
+    #: Services the traveller has switched on in the UI. Controls which
+    #: logistics tools the executor receives and what the prompts allow.
+    focus: list[str]
     destination: str | None
     start_date: str | None
     end_date: str | None
@@ -158,6 +168,8 @@ def initial_state(
     session_id: str,
     run_id: str,
     messages: list[AnyMessage],
+    trip_state: dict[str, Any] | None = None,
+    focus: list[str] | None = None,
 ) -> AgentState:
     """Build the starting state for a run.
 
@@ -166,16 +178,24 @@ def initial_state(
         session_id: Conversation thread.
         run_id: Unique id for this execution.
         messages: Conversation so far, including the new user message.
+        trip_state: Slot ledger persisted from earlier turns of this
+            conversation, if any.
+        focus: Services the traveller has enabled. None means all.
 
     Returns:
         A fully-initialised state.
     """
+    from app.agent.trip_state import normalise_focus
+
     return AgentState(
         messages=messages,
         user_id=user_id,
         session_id=session_id,
         run_id=run_id,
         goal="",
+        mode="plan",
+        trip_state=dict(trip_state or {}),
+        focus=normalise_focus(focus),
         destination=None,
         start_date=None,
         end_date=None,

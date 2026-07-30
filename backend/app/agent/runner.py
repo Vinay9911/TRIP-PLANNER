@@ -73,6 +73,8 @@ class TurnResult:
     session_id: str
     response: str
     status: str
+    mode: str = "plan"
+    trip_state: dict[str, Any] = None  # type: ignore[assignment]
     detected_language: str = "en"
     destination: str | None = None
     needs_clarification: bool = False
@@ -96,6 +98,8 @@ class TurnResult:
             self.tool_calls = []
         if self.token_breakdown is None:
             self.token_breakdown = []
+        if self.trip_state is None:
+            self.trip_state = {}
 
 
 class AgentRunner:
@@ -135,6 +139,8 @@ class AgentRunner:
         session_id: str,
         message: str,
         history: list[dict[str, str]] | None = None,
+        trip_state: dict[str, Any] | None = None,
+        focus: list[str] | None = None,
     ) -> TurnResult:
         """Process one user message and produce a reply.
 
@@ -144,6 +150,11 @@ class AgentRunner:
                 `thread_id`.
             message: What the traveller wrote.
             history: Prior turns, used when no checkpointer is configured.
+            trip_state: The conversation's slot ledger, loaded from the
+                session by the caller. The merged result is persisted back
+                after the turn.
+            focus: Services the traveller has enabled in the UI, or None
+                for all of them.
 
         Returns:
             The turn's result, including the trace data needed to persist it.
@@ -196,6 +207,8 @@ class AgentRunner:
                 message=message,
                 history=history or [],
                 records=records,
+                trip_state=trip_state,
+                focus=focus,
             )
         finally:
             # Read the hop count before stop_metering() clears the ContextVar
@@ -239,6 +252,10 @@ class AgentRunner:
                     destination=final_state.get("destination"),
                     language=final_state.get("detected_language"),
                 )
+
+                merged_trip_state = final_state.get("trip_state")
+                if merged_trip_state:
+                    await self.sessions.update_trip_state(session_id, user_id, merged_trip_state)
             except Exception:
                 logger.warning("runner.persist_reply_failed", exc_info=True)
 
@@ -247,6 +264,8 @@ class AgentRunner:
             session_id=session_id,
             response=response,
             status=final_state.get("status", "completed"),
+            mode=final_state.get("mode", "plan"),
+            trip_state=dict(final_state.get("trip_state") or {}),
             detected_language=final_state.get("detected_language", "en"),
             destination=final_state.get("destination"),
             needs_clarification=bool(final_state.get("needs_clarification")),
@@ -286,6 +305,8 @@ class AgentRunner:
         message: str,
         history: list[dict[str, str]],
         records: list[ToolCallRecord],
+        trip_state: dict[str, Any] | None = None,
+        focus: list[str] | None = None,
     ) -> AgentState:
         """Compile and invoke the agent graph for one turn.
 
@@ -294,7 +315,11 @@ class AgentRunner:
             itself raised.
         """
         graph = compile_graph(
-            AgentDependencies(memory_service=self.memory_service, settings=self.settings),
+            AgentDependencies(
+                memory_service=self.memory_service,
+                retriever=self.retriever,
+                settings=self.settings,
+            ),
             checkpointer=self.checkpointer,
             tool_records=records,
         )
@@ -310,7 +335,12 @@ class AgentRunner:
         messages.append(HumanMessage(content=message))
 
         state = initial_state(
-            user_id=user_id, session_id=session_id, run_id=run_id, messages=messages
+            user_id=user_id,
+            session_id=session_id,
+            run_id=run_id,
+            messages=messages,
+            trip_state=trip_state,
+            focus=focus,
         )
 
         config: dict[str, Any] = {

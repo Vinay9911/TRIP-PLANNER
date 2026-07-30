@@ -12,16 +12,17 @@ rejected option is named and the reason given.
 
 1. [System overview](#1-system-overview)
 2. [Request flow](#2-request-flow)
-3. [The planning loop](#3-the-planning-loop)
-4. [Tools and dynamic selection](#4-tools-and-dynamic-selection)
-5. [Memory](#5-memory)
-6. [Multi-hop RAG](#6-multi-hop-rag)
-7. [Data model and isolation](#7-data-model-and-isolation)
-8. [Multilingual support](#8-multilingual-support)
-9. [Failure handling](#9-failure-handling)
-10. [Deployment](#10-deployment)
-11. [Decision log](#11-decision-log)
-12. [What I would do next](#12-what-i-would-do-next)
+3. [Three gears, not one](#3-three-gears-not-one)
+4. [The planning loop](#4-the-planning-loop)
+5. [Tools and dynamic selection](#5-tools-and-dynamic-selection)
+6. [Memory](#6-memory)
+7. [Multi-hop RAG](#7-multi-hop-rag)
+8. [Data model and isolation](#8-data-model-and-isolation)
+9. [Multilingual support](#9-multilingual-support)
+10. [Failure handling](#10-failure-handling)
+11. [Deployment](#11-deployment)
+12. [Decision log](#12-decision-log)
+13. [What I would do next](#13-what-i-would-do-next)
 
 ---
 
@@ -40,7 +41,8 @@ graph TB
     end
 
     subgraph Agent["LangGraph StateGraph"]
-        U[understand]
+        U[understand<br/>extracts slots, picks gear]
+        ADV[advise<br/>one hop, ≤2 questions]
         P[plan]
         E[execute<br/>create_agent]
         R[replan]
@@ -63,14 +65,17 @@ graph TB
     end
 
     subgraph Storage["Supabase Postgres"]
-        PG[(profiles, sessions,<br/>messages, memories,<br/>traces, RAG cache)]
+        PG[(profiles, sessions<br/>+ trip_state, messages,<br/>memories, traces, RAG cache)]
     end
 
     FE --> AUTH --> ROUTES --> RUN --> U
-    U --> P --> E --> R
+    U -->|trip not specified| ADV
+    U -->|trip specified| P
+    P --> E --> R
     R -.loop.-> E
     R --> RESP
     U -.recall.-> MEM
+    ADV -.one hop.-> RAG
     E --> TOOLS
     TOOLS --> RAG
     TOOLS --> GEO & OM & TAV
@@ -118,10 +123,14 @@ sequenceDiagram
     M->>DB: vector search + all constraints
     M-->>G: memory block
 
-    G->>G: understand — language, dates, clarify?
+    G->>G: understand — language, dates, extract slots, decide gear
     alt too vague
         G-->>R: clarifying question
-    else clear
+    else destination but no trip yet
+        G->>T: advise — one-hop retrieval only
+        T-->>G: districts + a few passages
+        G->>G: options + outline + <=2 questions
+    else trip specified, or "just plan it"
         G->>G: plan
         loop each step
             G->>T: execute (model picks tools)
@@ -143,14 +152,69 @@ sequenceDiagram
 
 Two orderings in that diagram are deliberate and load-bearing:
 
-- **Memory recall happens before the clarification decision** (§5.3).
-- **Memory extraction happens after the response is sent** (§5.4).
+- **Memory recall happens before the clarification decision** (§6.5).
+- **Memory extraction happens after the response is sent** (§6.2).
 
 ---
 
-## 3. The planning loop
+## 3. Three gears, not one
 
-### 3.1 Why hand-built
+An earlier version routed every clear request straight into the full
+plan-execute pipeline. Live testing showed the failure: *"i want to go to
+kerala"* produced a complete two-day itinerary for districts the traveller
+never chose, at full pipeline cost, without once asking how long the trip was
+or what mattered to them. Technically correct, conversationally wrong — a
+human travel agent shown that message would talk first.
+
+So `understand` extracts trip *slots* (origin, duration, rough timing, party,
+budget, priorities) alongside the existing goal/language/clarify reading, and
+`app/agent/trip_state.decide_mode` — pure code, no model call — picks the gear
+for this turn:
+
+| Gear | When | Cost |
+|---|---|---|
+| `clarify` | No destination, or genuinely ambiguous | One model call, no tools |
+| `advise` | A destination but the trip isn't specified yet | One retrieval hop + one model call, ~3k tokens |
+| `plan` | Duration + a date signal are known, or "just plan it", or a scoped request ("flights to Tokyo") | The full pipeline, ~30–50k tokens |
+
+**Why a code decision, not a model one.** The routing rule has to be stated
+and defended in one sentence per branch (see the docstring on `decide_mode`)
+— "the model felt like it" is not an answer an interviewer accepts, and a
+non-deterministic gear choice is untestable. The model's job stays narrow:
+extraction only ("does this message state a duration?").
+
+**The advise gear runs real retrieval, not a guess.** `advisor_node` calls the
+same `MultiHopRetriever` the full pipeline uses, capped at `max_hops=1` — one
+call is enough to fetch the destination's guide article and its real district
+listing, so the options offered ("🌴 Backwaters — Alappuzha…") are grounded in
+the corpus, not the model's prior. Verified live: Kerala's advise turn
+returned four options built from real districts for 2,780 tokens, versus tens
+of thousands for a full plan.
+
+**Confirmation is sticky.** Once a turn reaches `plan`, `trip_state.
+outline_confirmed` is set, so a later edit ("make day 2 lighter") refines the
+existing plan instead of restarting the advisory conversation. Slots persist
+per conversation in `sessions.trip_state` (JSONB, migration 0009) and merge
+with *absence never erases* semantics — a follow-up that mentions no duration
+does not forget the one established two turns ago.
+
+**The advisory budget prevents an interrogation.** After
+`MAX_ADVISE_ROUNDS` (2) turns of advising, `decide_mode` forces `plan` with
+whatever is known rather than asking a third round of questions.
+
+**Composer scoping.** The frontend's Flights / Attractions / Stays /
+Restaurants toggles travel as `focus` on every `/chat` request. Flights and
+Stays map 1:1 to tools and are *removed* from the executor's toolbox when off
+— the same "absence is a guarantee, an instruction is a request" principle
+`get_tools(include_memory=...)` already uses for the memory opt-out. Attractions
+and Restaurants share `find_places` with everything else, so their scoping is
+enforced through prompt instructions instead.
+
+---
+
+## 4. The planning loop
+
+### 4.1 Why hand-built
 
 The brief names *"LangChain's Plan-and-Execute"*. That class no longer exists:
 LangChain 1.0 collapsed the old agent types into `create_agent`, and
@@ -172,7 +236,7 @@ graph LR
     RESP --> EN((end))
 ```
 
-### 3.2 `create_agent` inside the executor
+### 4.2 `create_agent` inside the executor
 
 The executor node **is** a `create_agent` instance. The inner tool-calling loop
 — parse a tool call, run it, feed the result back, decide whether to call
@@ -186,7 +250,7 @@ just use `create_agent`?"* is that it **is** used, for the part it is good at.
 reliably runs ahead and attempts later steps, which defeats planning and makes
 the replanner's view of progress wrong.
 
-### 3.3 Node responsibilities
+### 4.3 Node responsibilities
 
 | Node | Model | Does |
 |---|---|---|
@@ -196,7 +260,7 @@ the replanner's view of progress wrong.
 | `replan` | planner | continue / revise / finish |
 | `respond` | executor | Grounded answer in the user's language |
 
-### 3.4 Termination
+### 4.4 Termination
 
 Runaway retrieve-reason loops are the documented failure mode of agentic
 systems, and the one that costs money. Four independent exits:
@@ -218,7 +282,7 @@ Raising `AGENT_MAX_PLAN_STEPS` in config would otherwise silently start
 tripping LangGraph's guard instead of ours — surfacing as an opaque
 `GraphRecursionError` rather than the intended partial answer.
 
-### 3.5 Two cost optimisations worth defending
+### 4.5 Two cost optimisations worth defending
 
 **The replanner skips its own model call when the last step succeeded and more
 steps remain.** That answer is obvious, and asking costs one request per step
@@ -231,9 +295,9 @@ whose output nobody reads.
 
 ---
 
-## 4. Tools and dynamic selection
+## 5. Tools and dynamic selection
 
-### 4.1 The requirement
+### 5.1 The requirement
 
 > *The model itself decides which tool(s) to call and when — never hardcoded
 > keyword routing.*
@@ -250,7 +314,7 @@ be slow, costly and non-deterministic:
   nowhere in `app/`.
 - Every tool has a description substantial enough to drive selection.
 
-### 4.2 Why descriptions are prompt engineering
+### 5.2 Why descriptions are prompt engineering
 
 Tool descriptions say **when to prefer one tool over another**:
 
@@ -261,7 +325,7 @@ Tool descriptions say **when to prefer one tool over another**:
 That single sentence is what stops the agent burning Tavily credits on
 questions Wikivoyage answers for free.
 
-### 4.3 Constraints as filters, not hints
+### 5.3 Constraints as filters, not hints
 
 Geoapify's `conditions` parameter filters on `vegetarian`, `wheelchair`,
 `dogs`. When memory says the traveller is vegetarian, the restaurant search is
@@ -269,7 +333,7 @@ Geoapify's `conditions` parameter filters on `vegetarian`, `wheelchair`,
 may forget. This is what turns the constraints bonus from a prompt instruction
 into a query guarantee.
 
-### 4.4 Why these tools
+### 5.4 Why these tools
 
 | Tool | Chosen | Rejected, and why |
 |---|---|---|
@@ -279,7 +343,7 @@ into a query guarantee.
 | Guides | **Wikivoyage** — free, structured, district subpages | Wikipedia dump — no district structure, far too large for 500 MB |
 | Flights | **Mock behind a Protocol** | **Amadeus was decommissioned 2026-07-17**; Duffel's sandbox returns fictional-airline data |
 
-### 4.5 On shipping a mock
+### 5.5 On shipping a mock
 
 The assignment explicitly permits *"mock flight/hotel API"*. Rather than random
 numbers, the mock is grounded in things that are true:
@@ -302,7 +366,7 @@ avoiding**, not fake data as such.
 
 ---
 
-## 5. Memory
+## 6. Memory
 
 The area the brief weights most heavily, and where most submissions are thin.
 
@@ -313,7 +377,7 @@ Agreed — and worth stating why. A transcript cannot answer "is this traveller
 vegetarian?" without re-reading and re-reasoning over every message ever sent.
 Memory has to be **retrievable structured knowledge**, not history.
 
-### 5.1 Two systems
+### 6.1 Two systems
 
 | | Short-term | Long-term |
 |---|---|---|
@@ -323,7 +387,7 @@ Memory has to be **retrievable structured knowledge**, not history.
 | Retrieval | Recency window | Semantic similarity × salience |
 | Lifecycle | Trimmed, summarised | Deduplicated, reinforced, superseded, decayed |
 
-### 5.2 The write path
+### 6.2 The write path
 
 ```mermaid
 graph TB
@@ -360,7 +424,7 @@ and *"user seems friendly"* (unfalsifiable). The governing test in the prompt:
 
 Also never stored: names, contact details, payment information.
 
-### 5.3 Consolidation — the part that matters
+### 6.3 Consolidation — the part that matters
 
 Without it, telling the agent you are vegetarian in five sessions produces five
 near-identical rows, all competing for the same retrieval slots. This is the
@@ -376,7 +440,7 @@ Two details worth defending:
   how a profile evolved, which is the first thing you want when diagnosing an
   extractor that learned something wrong.
 
-### 5.4 The read path, and one correctness decision
+### 6.4 The read path, and one correctness decision
 
 Ranking is `similarity × salience`, not raw cosine:
 
@@ -405,7 +469,7 @@ about liking temples. That is a **correctness** problem, not a relevance one,
 which is why it is not tunable by a threshold. It costs a few extra tokens per
 turn and removes an entire class of failure.
 
-### 5.5 Memory suppresses redundant questions
+### 6.5 Memory suppresses redundant questions
 
 The brief asks the agent to clarify ambiguous input *and* to apply remembered
 preferences without repetition. Built independently, those collide: the agent
@@ -416,7 +480,7 @@ So recall runs **before** the clarification decision, and known facts enter the
 prompt marked as already answered. What remains is a question the agent
 genuinely could not answer for itself.
 
-### 5.6 Short-term memory
+### 6.6 Short-term memory
 
 LangGraph checkpointer keyed by `thread_id` = session id, so a conversation
 survives the process restarts that free-tier hosting causes routinely.
@@ -431,7 +495,7 @@ later.
 
 ---
 
-## 6. Multi-hop RAG
+## 7. Multi-hop RAG
 
 > *One search's result becomes the input to the next — not a single
 > retrieve-and-stuff call.*
@@ -469,7 +533,7 @@ graph TB
     H4 --> ANS[Grounded passages<br/>with citations]
 ```
 
-### 6.1 Why Wikivoyage makes this real
+### 7.1 Why Wikivoyage makes this real
 
 Three structural properties, all verified against the live API:
 
@@ -484,7 +548,7 @@ Three structural properties, all verified against the live API:
 Verified live: Kyoto has 6 district articles, Tokyo 59, Paris 38 after
 deduplicating redirect variants.
 
-### 6.2 Chunking follows structure, not a window
+### 7.2 Chunking follows structure, not a window
 
 The tutorial default — slide a fixed character window — is wrong for this
 corpus. A Wikivoyage `See` section is a list of individually-described
@@ -498,19 +562,19 @@ never cut an entry in half. Every chunk keeps its section label, and the
 provenance is prefixed into the embedded text — `Eat` and `Sleep` sections of
 one district otherwise embed very close together, sharing place names and tone.
 
-### 6.3 One search per constraint
+### 7.3 One search per constraint
 
 Hop 3 issues a **separate** search per constraint rather than one combined
 query. Embedding `"vegetarian AND wheelchair accessible"` produces a vector
 near neither — the classic multi-constraint retrieval failure.
 
-### 6.4 Stop conditions
+### 7.4 Stop conditions
 
 Given equal weight to the hops: hop ceiling, no new documents, sufficiency
 reached, district cap (4). A model naming a district that does not exist is
 filtered against the real list, so a hallucination costs nothing.
 
-### 6.5 Caching
+### 7.5 Caching
 
 Articles are fetched **on demand** and cached with a TTL. A full dump is tens
 of gigabytes against a 500 MB database. Embedding one district costs 6–10
@@ -520,9 +584,9 @@ embedding quota is gone within a day.
 
 ---
 
-## 7. Data model and isolation
+## 8. Data model and isolation
 
-### 7.1 Why Postgres + pgvector, not Pinecone
+### 8.1 Why Postgres + pgvector, not Pinecone
 
 The brief suggested *"Pinecone, FAISS"*. Those are examples, not a fixed list —
 and pgvector **is** a vector database, among the most widely deployed in 2026.
@@ -541,7 +605,7 @@ persistence, no metadata filtering and no notion of a user.
 The `VectorStore` interface is real — `InMemoryMemoryStore` mirrors the SQL
 ranking formula and is what the memory tests run against.
 
-### 7.2 Isolation is enforced by the database
+### 8.2 Isolation is enforced by the database
 
 The backend connects to Postgres directly, which authenticates as `postgres` —
 a role that can read every row. Used naively, the RLS policies would never run
@@ -564,7 +628,7 @@ next borrower of a pooled connection.
 `service_scope(reason=...)` is the deliberate escape hatch — a separate,
 greppable function name so an audit of privileged access is one search.
 
-### 7.3 Schema
+### 8.3 Schema
 
 ```mermaid
 erDiagram
@@ -589,7 +653,7 @@ Two authorization details:
   the caller's role without recursing into the policies on `profiles` — the
   most common way RLS setups break on Supabase.
 
-### 7.4 Auth
+### 8.4 Auth
 
 JWTs are verified **locally** against Supabase's JWKS: no network round trip
 per request, and the API keeps working through a brief auth-service outage.
@@ -606,7 +670,7 @@ Three properties, each guarding a mistake that is easy to ship:
 
 ---
 
-## 8. Multilingual support
+## 9. Multilingual support
 
 The design decision that makes this more than a translation veneer:
 
@@ -637,15 +701,15 @@ for non-Latin scripts and a regression test.
 
 ---
 
-## 9. Failure handling
+## 10. Failure handling
 
-### 9.1 A failing tool must not fail the run
+### 10.1 A failing tool must not fail the run
 
 If the weather API is down while planning Kyoto, the right outcome is an
 itinerary without weather advice — not a 502. Every tool returns a
 `ToolResult`; upstream failures become `status="degraded"`.
 
-### 9.2 The degraded message is written for the model
+### 10.2 The degraded message is written for the model
 
 The part that is easy to get wrong. `{"error": "timeout"}` tells a model
 nothing about what to do next, and models faced with an unexplained failure
@@ -658,7 +722,7 @@ either retry forever or invent the missing data. So:
 That final clause prevents the retry loop. A test asserts every degraded
 message contains a do-not-repeat instruction.
 
-### 9.3 Error taxonomy
+### 10.3 Error taxonomy
 
 Split by **required response**, not by where it was thrown:
 
@@ -670,7 +734,7 @@ Split by **required response**, not by where it was thrown:
 | `AuthenticationError` / `AuthorizationError` | reject — never degrade, that would be a security bug |
 | `AgentBudgetExceededError` | stop and answer with what exists |
 
-### 9.4 Nothing about telemetry can break a request
+### 10.4 Nothing about telemetry can break a request
 
 Trace persistence, memory extraction and `last_seen_at` updates all swallow
 their exceptions. By the time they run the traveller has an answer; turning a
@@ -678,7 +742,7 @@ successful turn into an error to record it would be absurd.
 
 ---
 
-## 10. Deployment
+## 11. Deployment
 
 ```mermaid
 graph LR
@@ -706,7 +770,7 @@ than to produce a better itinerary with a longer plan.
 
 ---
 
-## 11. Decision log
+## 12. Decision log
 
 | # | Decision | Rejected | Reason |
 |---|---|---|---|
@@ -728,7 +792,7 @@ than to produce a better itinerary with a longer plan.
 
 ---
 
-## 12. What I would do next
+## 13. What I would do next
 
 Honest about what is thin, in priority order.
 

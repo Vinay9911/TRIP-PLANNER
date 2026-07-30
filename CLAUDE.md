@@ -66,10 +66,21 @@ backend/app/
   tools/      8 tools + registry                  (the model's action surface)
   memory/     short_term + extractor/consolidator/store/service
   rag/        corpus, chunking, index, retriever
-  agent/      state, graph, runner, nodes/
+  agent/      state, trip_state, graph, runner, nodes/
   api/        deps + v1/routes/
-supabase/migrations/   0001–0008, applied in order
+supabase/migrations/   0001–0009, applied in order
 ```
+
+**The three-gear conversation** (`agent/trip_state.py` owns the rules):
+`clarify` (no destination → one friendly question) / `advise` (destination but
+no trip yet → one-hop grounded options + ≤2 questions, ~3k tokens) / `plan`
+(the full pipeline — runs when duration + a date signal are known, on "just
+plan it", or for scoped requests like "flights to Tokyo"). The gear decision
+is pure code over model-extracted slots (`decide_mode`), never model judgement.
+Slots persist per conversation in `sessions.trip_state` (JSONB); absence never
+erases. The composer's Flights/Attractions/Stays/Restaurants toggles travel as
+`focus` on every chat request — flights/stays are enforced by removing the
+tool, attractions/restaurants by prompt (they share `find_places`).
 
 **The rule that keeps this honest:** `agent/` imports `tools/`; `tools/` never
 imports `agent/`. A tool that knows about the planner cannot be tested alone.
@@ -135,12 +146,17 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
 
 ## Status
 
-Backend and frontend complete, 122 tests passing. Verified end-to-end against
+Backend and frontend complete, 166 tests passing. Verified end-to-end against
 live Supabase, Groq, Gemini, Tavily, Geoapify and Wikivoyage: planning, dynamic
 tool selection, multi-hop RAG, memory extraction and cross-session recall,
 clarification, Japanese replies, and the admin trace all confirmed working.
 
-Live Supabase project: `nlwzlplylmgawangqdhm` (ap-southeast-1), 8 migrations
+The three-gear conversation is live-verified: "i want to go to kerala" ran an
+advisory turn (mode=advise, 2,780 tokens, four grounded options, two
+questions); the follow-up filling duration/window/origin ran the full
+pipeline (mode=plan) with a flight step from Delhi in the plan.
+
+Live Supabase project: `nlwzlplylmgawangqdhm` (ap-southeast-1), 9 migrations
 applied, RLS verified (an authenticated user cannot escalate to admin and sees
 only their own rows).
 

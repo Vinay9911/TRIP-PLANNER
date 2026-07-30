@@ -86,7 +86,7 @@ class SessionRepository:
             cursor = await conn.execute(
                 """
                 select id::text, user_id::text, title, destination, language,
-                       message_count, created_at, updated_at
+                       message_count, trip_state, created_at, updated_at
                   from public.sessions
                  where id = %s and archived_at is null
                 """,
@@ -139,6 +139,28 @@ class SessionRepository:
                  where id = %s
                 """,
                 (title, destination, language, session_id),
+            )
+
+    async def update_trip_state(
+        self, session_id: str, user_id: str, trip_state: dict[str, Any]
+    ) -> None:
+        """Persist the conversation's slot ledger after a turn.
+
+        A whole-value replace rather than a JSONB merge, deliberately: the
+        merge semantics (absence never erases, later wins) are business rules
+        that live in `app/agent/trip_state.py` where they are unit-tested,
+        and the runner hands this method the already-merged result. Encoding
+        the same rules a second time in SQL would give them two homes.
+
+        Args:
+            session_id: Conversation id.
+            user_id: Owner, enforced by RLS.
+            trip_state: The merged ledger to store.
+        """
+        async with self.db.user_scope(user_id) as conn:
+            await conn.execute(
+                "update public.sessions set trip_state = %s::jsonb where id = %s",
+                (json.dumps(trip_state), session_id),
             )
 
     async def archive(self, session_id: str, user_id: str) -> bool:

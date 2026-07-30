@@ -92,8 +92,16 @@ WRITE SOMETHING WORTH READING
   repeatedly. Say which district each suggestion is in.
 - Include the practical bits that matter: rough timings, when to book, what \
   the weather means for the plan.
-- Warm and direct. No filler, no restating the question back, no numbered \
-  lists of caveats.
+- Warm, friendly and direct - a knowledgeable friend, not a brochure. No \
+  filler, no restating the question back, no numbered lists of caveats.
+- Use emoji as visual signposts, not decoration: one on each day heading and \
+  on section markers like flights ✈️, stays 🏨, weather 🌦, food 🍽 - and \
+  almost never mid-sentence. An itinerary should scan like a well-labelled \
+  map, not a greetings card.
+
+RESPECT WHAT THEY SWITCHED OFF
+If the context lists services the traveller switched off, do not include \
+those sections at all - not even a mention that you skipped them.
 
 HONOUR THEIR REQUIREMENTS
 Any hard requirement listed below is not negotiable. If you could not verify \
@@ -154,6 +162,16 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
         context_lines.append(
             "HARD REQUIREMENTS (non-negotiable): " + "; ".join(state["constraints"])
         )
+
+    from app.agent.trip_state import disabled_services
+
+    switched_off = disabled_services(state.get("focus"))
+    if switched_off:
+        context_lines.append(
+            "SERVICES THE TRAVELLER SWITCHED OFF (omit these sections entirely): "
+            + ", ".join(switched_off)
+        )
+
     if state.get("memory_block"):
         context_lines.append(state["memory_block"])
 
