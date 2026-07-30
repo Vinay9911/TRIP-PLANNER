@@ -65,6 +65,14 @@ logger = get_logger(__name__)
 
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
+#: How long to rest a key that has spent its daily token allowance.
+#:
+#: Half an hour rather than "until midnight": the reset is on a rolling
+#: window rather than a calendar day, and a key that frees up sooner should
+#: come back into use. The point is only to stop the pool hammering a key
+#: that has nothing left, not to predict the exact reset.
+DAILY_LIMIT_COOLDOWN_SECONDS: float = 1800.0
+
 
 class ModelRole(StrEnum):
     """Which class of work a model call belongs to.
@@ -119,7 +127,7 @@ def _build_model(
     )
 
 
-class _UsageRecordingCallback(BaseCallbackHandler):
+class UsageRecordingCallback(BaseCallbackHandler):
     """Records token usage for calls this module does not itself make.
 
     `call_model` and `structured_call` read usage off the response they get
@@ -128,13 +136,20 @@ class _UsageRecordingCallback(BaseCallbackHandler):
     directly, several times per step, resending the accumulated message
     history and tool results each iteration.
 
-    Without this handler, none of that was metered. The consequence was not
-    just an inaccurate number - it actively misled diagnosis. Runs recorded
-    ~7,400 tokens and still failed with rate limits against four healthy keys
-    each allowing 12,000 tokens/minute, which made the ceiling look like a
-    key-count problem when in fact the executor's unmetered loop was the bulk
-    of real consumption, concentrated on the single key its model instance
-    holds for its lifetime.
+    Without this handler none of that is metered, and the consequence is not
+    merely an inaccurate number - it actively misleads diagnosis. Runs were
+    recording ~5,000 tokens and still failing on rate limits, which made the
+    ceiling look like a per-minute problem. It was not: Groq's free tier caps
+    **tokens per day** (100,000 per account for
+    `llama-3.3-70b-versatile`), that cap appears in no response header, and
+    the executor's unmetered loop was quietly spending most of it.
+
+    Attach it in the **invocation** config, not on the model object. A
+    previous attempt used `model.with_config(callbacks=...)`, which looked
+    correct and did nothing: `create_agent` builds its own graph around the
+    model, and config bound to that object never reached the calls it makes.
+    The meter read zero for every executor step until the handler moved into
+    `agent.ainvoke(..., {"callbacks": [...]})`.
 
     Attributed to `"execute"` rather than a per-call label: the point is to
     make the executor's share of the budget visible, and the individual
@@ -254,11 +269,14 @@ def get_model(
         api_key=get_llm_pool(cfg).acquire(),
     )
 
-    # Attached per-call rather than baked into `_build_model`, whose result is
-    # cached and shared: mutating the cached client's callback list would
-    # accumulate handlers on every call. `with_config` returns a configured
-    # view and leaves the cached client untouched.
-    return model.with_config(callbacks=[_UsageRecordingCallback()])  # type: ignore[return-value]
+    # Deliberately returned bare. An earlier version attached the usage
+    # callback here with `with_config`, which looked right and did nothing:
+    # `create_agent` builds its own graph around the model and the config
+    # attached to that object never reached the calls it makes. Measured
+    # afterwards, the meter still read zero for every executor step. The
+    # handler now travels in the *invocation* config instead - see
+    # `_run_step_agent` - which is the level LangChain actually propagates.
+    return model
 
 
 def _classify_provider_error(exc: Exception) -> Exception:
@@ -279,11 +297,32 @@ def _classify_provider_error(exc: Exception) -> Exception:
 
     if status == 429 or "rate limit" in text or "too many requests" in text:
         retry_after = getattr(exc, "retry_after", None)
+
+        # A per-*day* exhaustion is a different situation from a per-minute
+        # one and must not be treated the same. Groq's free tier caps tokens
+        # per day (100,000 per account) and reports it in the 429 body as
+        # "tokens per day (TPD)" - never in a header. Its suggested
+        # `retry_after` in that case is the trickle until a little budget
+        # frees up, so honouring it makes the pool return to a key that is
+        # effectively finished for the day and fail again immediately, burning
+        # attempts and time on every subsequent request.
+        #
+        # Recognised here and given a long rest instead, so the pool moves to
+        # a key with budget left rather than cycling a dead one.
+        daily = "per day" in text or "tpd" in text
+        if daily:
+            return RateLimitError(
+                "This API key has used its daily token allowance.",
+                service="groq",
+                retry_after_seconds=DAILY_LIMIT_COOLDOWN_SECONDS,
+                details={"original": str(exc)[:500], "scope": "per_day"},
+            )
+
         return RateLimitError(
             "The language model provider rejected the request for exceeding a rate limit.",
             service="groq",
             retry_after_seconds=float(retry_after) if retry_after else None,
-            details={"original": str(exc)[:500]},
+            details={"original": str(exc)[:500], "scope": "per_minute"},
         )
 
     return ExternalServiceError(

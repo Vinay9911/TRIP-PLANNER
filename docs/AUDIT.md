@@ -1,5 +1,14 @@
 # Agent audit — 30 July 2026
 
+> **Correction, same day.** Section A below concluded that the four API keys
+> were healthy and that key count was not the constraint. The first half of
+> that is wrong. It was based on the `x-ratelimit-*` response headers, which
+> report only the **per-minute** window — and Groq's binding limit on the free
+> tier is **100,000 tokens per day per account**, which appears in no header
+> at all. A key can read "11,959 tokens remaining" while being entirely out of
+> daily budget, which is exactly what was happening. The corrected analysis is
+> in [§A-revised](#a-revised--the-real-ceiling-is-tokens-per-day).
+
 A diagnostic pass over the running system, prompted by two real transcripts
 that went wrong and by four specific questions about whether features were
 working at all.
@@ -238,3 +247,74 @@ tests in `tests/unit/test_rag_redirects.py`.
 4. **Consider a smaller model for the executor.** It does the most calls with
    the largest prompts; the 70B model is not obviously required for
    "call this tool with these arguments".
+
+---
+
+## A-revised — the real ceiling is tokens per day
+
+A four-message conversation ("India" → "Delhi then" → "Let's do Eastern
+Delhi" → "places to eat") failed twice on rate limits. Runs recorded only
+4,735 and 6,807 tokens. Every key reported full per-minute budget. Both facts
+were true and neither explained the failure.
+
+The 429 body did:
+
+```
+Rate limit reached for model `llama-3.3-70b-versatile`
+in organization `org_01khg29mw3f81re84spb7qcmt7`
+on tokens per day (TPD): Limit 100000, Used 96696, Requested 3390
+```
+
+**100,000 tokens per day, per account, and no header reports it.** Confirmed
+independently on a second key, which showed `Used 99793` while its
+`x-ratelimit-remaining-tokens` header still read 11,959.
+
+The keys are from separate accounts (two distinct `org_` ids were observed),
+so they do each carry their own daily allowance — that part of the original
+setup advice was sound. The problem was how fast each allowance was being
+spent.
+
+### Where the day's budget was going
+
+Tool descriptions. They are serialised into the schema and re-sent on **every
+iteration** of the executor's ReAct loop:
+
+| | chars | tokens/call |
+|---|---|---|
+| 8 tools, prose docstrings | 15,032 | 3,758 |
+| after trimming | 9,948 | 2,487 |
+| research step only (4 tools) | 5,196 | 1,299 |
+| compose step (0 tools) | 0 | 0 |
+
+Across a typical plan — two research steps, one logistics, one compose, about
+three model calls each — that is **37,580 tokens of tool description per
+itinerary**, better than a third of a day's budget before a single word of
+travel content. Roughly ten plans per day across four accounts.
+
+### Fixes
+
+- **Docstrings are billed; comments are free.** The descriptions now say only
+  what the model needs to choose a tool and fill its arguments. The reasoning
+  a human wants moved into comments, which cost nothing at inference.
+- **Each step gets only the tools its kind can use.** A research step has no
+  business booking a flight; a compose step needs no tools at all.
+- Together: **37,580 → 11,859 tokens per plan, 68% less.** Roughly ten plans
+  a day becomes roughly thirty-three.
+- **A daily exhaustion now parks the key for 30 minutes** instead of honouring
+  the provider's suggested retry, which was a trickle and put the pool
+  straight back onto a key with nothing left.
+- **The failure message tells the truth.** "Try again in a minute" was wrong
+  when the budget resets over hours; someone follows that advice, fails, and
+  concludes the product is broken.
+
+### And the metering fix from earlier did not work
+
+The previous pass attached the usage callback with
+`model.with_config(callbacks=[...])`. That looks correct and does nothing:
+`create_agent` builds its own graph around the model, and config bound to the
+model object never reaches the calls it makes. Measured afterwards, the meter
+read **zero calls, zero tokens** for every executor step — so the numbers in
+§A were only ever counting planner and responder work.
+
+Moved into the invocation config, `agent.ainvoke(..., {"callbacks": [...]})`,
+and verified firing: `calls=1 tokens=1331` on a single step.

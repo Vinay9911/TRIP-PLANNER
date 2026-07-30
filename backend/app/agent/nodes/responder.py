@@ -487,9 +487,14 @@ def _no_findings_response(state: AgentState) -> AgentState:
         A partial state update with an honest failure message.
     """
     completed = state.get("completed_steps", [])
-    rate_limited = any(
-        result.error and "rate limit" in result.error.lower() for result in completed
-    )
+    errors = " ".join(result.error.lower() for result in completed if result.error)
+
+    # A daily allowance and a per-minute burst are different problems and
+    # deserve different advice. Telling someone to "try again in a minute"
+    # when the budget resets in hours is not a small inaccuracy - they will
+    # try again, fail again, and conclude the product is broken.
+    daily_exhausted = "daily token allowance" in errors
+    rate_limited = "rate limit" in errors or daily_exhausted
 
     logger.warning(
         "agent.no_findings",
@@ -501,7 +506,15 @@ def _no_findings_response(state: AgentState) -> AgentState:
     destination = state.get("destination")
     where = f" for {destination}" if destination else ""
 
-    if rate_limited:
+    if daily_exhausted:
+        message = (
+            f"I've used up today's planning allowance, so I couldn't finish{where}. "
+            "It resets on a rolling window over the next few hours — everything "
+            "we've discussed is saved, so you can pick this up right where we "
+            "left off."
+        )
+        stopped = "llm_daily_limit"
+    elif rate_limited:
         message = (
             "I hit my request limit part-way through planning"
             f"{where}, so I could not finish. Please try again in a minute - the "

@@ -66,24 +66,33 @@ def _serialise(result: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Wrappers
 # ---------------------------------------------------------------------------
+#
+# **Docstrings here are billed; comments are free.** Every docstring below is
+# serialised into the tool schema and re-sent to the model on *every* call of
+# the executor's ReAct loop. Measured against the live API, the earlier prose
+# versions came to 15,032 characters - roughly 3,750 tokens per call, and
+# about 45,000 tokens across one full plan. Groq's free tier allows 100,000
+# tokens per day, so tool descriptions alone were consuming close to half a
+# day's budget per itinerary.
+#
+# So these docstrings say only what the model needs in order to pick the right
+# tool and fill its arguments. The reasoning a human reader wants lives in
+# comments like this one, which cost nothing at inference time.
 
 
 @tool
 async def get_weather_forecast(
     location: str, start_date: str | None = None, end_date: str | None = None
 ) -> dict[str, Any]:
-    """Get the weather forecast for a city over a date range.
+    """Weather forecast for a city and date range.
 
-    Call this whenever weather could change a recommendation - deciding
-    between indoor and outdoor activities, advising what to pack, or warning
-    about a rainy day. Forecasts are reliable up to about 16 days ahead;
-    beyond that you will get typical seasonal conditions clearly labelled as
-    such, which you must not present as a forecast.
+    Use when weather changes a recommendation. Beyond ~16 days you get
+    seasonal averages, labelled as such - never present those as a forecast.
 
     Args:
-        location: City name, e.g. "Kyoto".
-        start_date: First day as YYYY-MM-DD. Defaults to today.
-        end_date: Last day as YYYY-MM-DD. Defaults to the day after start.
+        location: One city or town. Not a region or country.
+        start_date: YYYY-MM-DD. Defaults to today.
+        end_date: YYYY-MM-DD. Defaults to the day after start.
     """
     return _serialise(
         await weather.get_weather_forecast(
@@ -100,27 +109,21 @@ async def find_places(
     radius_metres: int = 5000,
     limit: int = 12,
 ) -> dict[str, Any]:
-    """Find real, mapped places near a location, filtered by attributes.
+    """Real mapped venues with addresses and coordinates.
 
-    Returns actual venues with addresses and coordinates from OpenStreetMap.
-    Use this when you need specific places to put in an itinerary, rather
-    than general description of an area.
-
-    Always pass `conditions` when the traveller has a dietary, accessibility
-    or pet requirement - it filters at the source, which is far more reliable
-    than filtering the results yourself afterwards.
+    Use for specific places to put in an itinerary. Pass `conditions` for any
+    dietary or access requirement - it filters at the source, which is far
+    more reliable than filtering results yourself.
 
     Args:
-        location: City, district or neighbourhood, e.g. "Higashiyama, Kyoto".
-        categories: What to look for: attractions, sights, museums, culture,
-            parks, nature, restaurants, cafes, bars, food, nightlife,
-            shopping, markets, hotels, hostels, religious, viewpoints,
-            beaches.
-        conditions: Hard filters: vegetarian, vegan, halal, kosher,
-            gluten_free, wheelchair_accessible, dog_friendly, free_entry,
-            internet.
-        radius_metres: Search radius from the location centre.
-        limit: Maximum places to return.
+        location: City or district, e.g. "Higashiyama, Kyoto".
+        categories: attractions, sights, museums, culture, parks, nature,
+            restaurants, cafes, bars, food, nightlife, shopping, markets,
+            hotels, religious, viewpoints, beaches.
+        conditions: vegetarian, vegan, halal, kosher, gluten_free,
+            wheelchair_accessible, dog_friendly, free_entry, internet.
+        radius_metres: Search radius.
+        limit: Max results.
     """
     return _serialise(
         await places.find_places(
@@ -140,26 +143,16 @@ async def search_travel_guide(
     intent: str = "general",
     constraints: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Research a destination in depth using curated travel guides.
+    """Deep research on a destination from curated travel guides.
 
-    Your first choice for understanding a place: which neighbourhoods suit
-    which travellers, what is genuinely worth seeing, where to eat, which
-    area to stay in. Runs a chained search that works out the city's
-    districts, investigates the ones matching this traveller, then
-    cross-references their requirements - so one call does the work of
-    several, and it costs no API quota.
-
-    Use `search_web` instead for anything time-sensitive: current prices,
-    opening hours, events on particular dates, temporary closures.
+    First choice for what a place is like: districts, sights, food, where to
+    stay. Free and multi-hop. Use `search_web` for anything time-sensitive.
 
     Args:
-        destination: City to research, e.g. "Kyoto".
-        question: What you want to know, stated fully and specifically. The
-            more specific, the better the neighbourhoods chosen.
-        intent: general, food, attractions, accommodation, shopping, or
-            transport.
-        constraints: Hard requirements to cross-reference, e.g.
-            ["vegetarian"]. Pass them here rather than inside `question`.
+        destination: City or region to research.
+        question: What you want to know, specifically.
+        intent: general, food, attractions, accommodation, shopping, transport.
+        constraints: Hard requirements, e.g. ["vegetarian"].
     """
     return _serialise(
         await travel_guide.search_travel_guide(
@@ -175,22 +168,16 @@ async def search_travel_guide(
 async def search_web(
     query: str, max_results: int = 5, deep_search: bool = False, recent_only: bool = False
 ) -> dict[str, Any]:
-    """Search the live web for current, time-sensitive information.
+    """Live web search for time-sensitive facts.
 
-    Use for things that change and that a travel guide cannot know: festivals
-    and events during the traveller's dates, temporary closures, current
-    ticket prices, recent traveller reports. For stable background about a
-    destination, use `search_travel_guide` first - it is free and better
-    structured.
+    Use for events on given dates, closures, current prices. For stable
+    background use search_travel_guide - free and better structured.
 
     Args:
-        query: A specific, self-contained query including the city and any
-            date context, e.g. "Kyoto festivals August 2026".
-        max_results: How many results to return, 1-10.
-        deep_search: Run a more thorough search. Costs more quota - reserve it
-            for when a basic search has already failed.
-        recent_only: Restrict to the past month. Good for events and
-            closures, wrong for general background.
+        query: Self-contained query including city and dates.
+        max_results: 1-10.
+        deep_search: Slower and costlier; only after a basic search failed.
+        recent_only: Past month only. Good for events, wrong for background.
     """
     return _serialise(
         await web_search.search_web(
@@ -211,19 +198,17 @@ async def search_flights(
     cabin: str = "economy",
     adults: int = 1,
 ) -> dict[str, Any]:
-    """Search for flights between two cities.
+    """Flights between two cities. Simulated data, not bookable.
 
-    Use when the traveller asks about getting somewhere, wants a transport
-    budget, or is comparing dates. Not needed for planning what to do once
-    they have arrived.
+    One call covers a round trip - pass return_date rather than calling twice.
 
     Args:
-        origin: Departure city, e.g. "Singapore".
-        destination: Arrival city, e.g. "Tokyo".
-        departure_date: Outbound date as YYYY-MM-DD.
-        return_date: Optional inbound date as YYYY-MM-DD.
-        cabin: economy, premium_economy, business, or first.
-        adults: Number of adult passengers, 1-9.
+        origin: Departure city.
+        destination: Arrival city.
+        departure_date: YYYY-MM-DD.
+        return_date: YYYY-MM-DD for a round trip.
+        cabin: economy, premium_economy, business, first.
+        adults: 1-9.
     """
     return _serialise(
         await travel_logistics.search_flights(
@@ -245,19 +230,17 @@ async def search_accommodation(
     guests: int = 2,
     max_price_per_night: float | None = None,
 ) -> dict[str, Any]:
-    """Search for places to stay in a city.
+    """Places to stay in a city. Simulated data, not bookable.
 
-    Use when the traveller asks where to stay or wants an accommodation
-    budget. Always pass `max_price_per_night` when a budget is known -
-    including one you recalled from their stored preferences - so results
-    respect it rather than being filtered afterwards.
+    Pass max_price_per_night whenever a budget is known, including a
+    remembered one, so results respect it rather than being filtered after.
 
     Args:
-        city: City name, e.g. "Kyoto".
-        check_in: Arrival date as YYYY-MM-DD.
-        check_out: Departure date as YYYY-MM-DD.
-        guests: Number of guests, 1-8.
-        max_price_per_night: Nightly budget ceiling in USD.
+        city: City name.
+        check_in: YYYY-MM-DD.
+        check_out: YYYY-MM-DD.
+        guests: 1-8.
+        max_price_per_night: Budget ceiling in USD.
     """
     return _serialise(
         await travel_logistics.search_accommodation(
@@ -272,17 +255,14 @@ async def search_accommodation(
 
 @tool
 async def recall_user_preferences(query: str, limit: int = 6) -> dict[str, Any]:
-    """Look up what is already known about this traveller from past conversations.
+    """Look up stored facts about this traveller.
 
-    Their relevant preferences are loaded automatically before you start, so
-    reach for this only when the conversation moves to something the opening
-    request did not cover - checking dietary needs before recommending
-    restaurants, or budget before suggesting hotels.
+    Relevant ones are loaded automatically before you start, so use this only
+    for something the opening request did not cover.
 
     Args:
-        query: What you want to know, described as the kind of facts you are
-            after, e.g. "dietary restrictions and food preferences".
-        limit: Maximum facts to return, 1-15.
+        query: The kind of facts wanted, e.g. "dietary restrictions".
+        limit: 1-15.
     """
     return _serialise(await memory_tools.recall_user_preferences(query=query, limit=limit))
 
@@ -291,25 +271,17 @@ async def recall_user_preferences(query: str, limit: int = 6) -> dict[str, Any]:
 async def save_user_preference(
     fact: str, category: str = "preference", subject: str = "other"
 ) -> dict[str, Any]:
-    """Remember a durable fact about the traveller for future conversations.
+    """Remember a durable fact about the traveller.
 
-    Use when they state something that will still matter on a completely
-    different trip - a dietary requirement, budget level, travel style - and
-    especially when they correct something you had wrong.
-
-    Do not use it for trip-specific details like these dates, this hotel or
-    this destination. Those are useless next time and clutter their profile.
+    Only for things still true on a different trip. Never trip-specific
+    details like these dates or this hotel.
 
     Args:
-        fact: One atomic fact, third person and self-contained, e.g.
-            "Traveller is vegetarian and does not eat fish." Never include
-            names, contact details or payment information.
-        category: constraint (a hard requirement), preference (a soft
-            leaning), identity (a stable attribute), or experience (somewhere
-            they have been).
+        fact: One atomic fact, third person, no personal identifiers.
+        category: constraint, preference, identity, experience.
         subject: diet, allergy, accessibility, budget, pace, accommodation,
             transport, interests, climate, companions, pets, home_base,
-            languages, visited, avoid, or other.
+            languages, visited, avoid, other.
     """
     return _serialise(
         await memory_tools.save_user_preference(fact=fact, category=category, subject=subject)
@@ -379,3 +351,64 @@ def get_tools(*, include_memory: bool = True, focus: list[str] | None = None) ->
 def get_tool_names() -> list[str]:
     """Return the names of all registered tools, for prompts and tests."""
     return [tool_.name for tool_ in ALL_TOOLS]
+
+
+#: Which tools each kind of plan step can actually use.
+#:
+#: Every tool handed to the executor costs its full schema on *every* call of
+#: that step's ReAct loop, whether or not it is used. A research step has no
+#: business booking a flight, and a logistics step does not need to save a
+#: memory - so sending those schemas is paying, repeatedly, for options that
+#: were never going to be taken.
+#:
+#: Narrowing by step kind roughly halves the per-call payload. It is not a
+#: constraint on the model's judgement in any meaningful sense: the planner
+#: already decided what kind of work this step is, and this only removes tools
+#: that would be wrong for that kind of work. Tool *choice within the step* is
+#: still entirely the model's.
+_TOOLS_FOR_STEP_KIND: dict[str, tuple[str, ...]] = {
+    "research": (
+        "search_travel_guide",
+        "find_places",
+        "search_web",
+        "recall_user_preferences",
+    ),
+    "logistics": (
+        "search_flights",
+        "search_accommodation",
+        "get_weather_forecast",
+        "find_places",
+    ),
+    "verify": (
+        "search_web",
+        "get_weather_forecast",
+        "search_travel_guide",
+    ),
+    # Composition needs no tools at all: by then the evidence is gathered, and
+    # the responder writes the answer.
+    "compose": (),
+}
+
+
+def get_tools_for_step(
+    kind: str, *, include_memory: bool = True, focus: list[str] | None = None
+) -> list[BaseTool]:
+    """Return the tools appropriate to one kind of plan step.
+
+    Args:
+        kind: The step's `StepKind` - research, logistics, verify or compose.
+        include_memory: Whether memory tools may be included.
+        focus: Services the traveller has enabled; a switched-off service's
+            tool is removed exactly as in `get_tools`.
+
+    Returns:
+        The tool list for this step. An unrecognised kind falls back to the
+        full toolbox rather than to nothing, so a new step kind degrades to
+        "more expensive" instead of "unable to act".
+    """
+    allowed = _TOOLS_FOR_STEP_KIND.get(kind)
+    available = get_tools(include_memory=include_memory, focus=focus)
+
+    if allowed is None:
+        return available
+    return [tool_ for tool_ in available if tool_.name in allowed]

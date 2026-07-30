@@ -104,11 +104,28 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
 - **Free tiers:** Render sleeps after 15 min, Supabase pauses after 7 days.
   `.github/workflows/keep-warm.yml` pings `/health/ready` every 10 min, which
   fixes both because that endpoint touches the database.
-- **Groq's real ceiling is TPM, not RPD.** Measured live: 12,000 tokens/min and
-  1,000 requests/day for `llama-3.3-70b-versatile`. A full run is ~30-50k
-  tokens, so runs fail on tokens long before requests. Add more keys to
-  `GROQ_API_KEY` (comma-separated) - each one adds 12,000 TPM. Do not "fix"
-  this by switching to the 8B model: it has *less* TPM (6,000).
+- **Groq's real ceiling is tokens per DAY, and no header reports it.**
+  Measured against the live API: `llama-3.3-70b-versatile` allows **100,000
+  tokens/day per account**, and the 429 body says so ("on tokens per day
+  (TPD): Limit 100000, Used 96696"). The `x-ratelimit-*` headers only expose
+  the *per-minute* window (12,000 TPM) and the request count - so a key can
+  read "11,959 tokens remaining" while being completely out of daily budget.
+  An earlier diagnosis was wrong for exactly this reason. Per-minute limits
+  differ per model: planner `gpt-oss-120b` 8,000 TPM, executor
+  `llama-3.3-70b-versatile` 12,000, utility `llama-3.1-8b-instant` 6,000.
+  Keys from **separate accounts** each get their own 100,000/day, so more
+  accounts is the only lever that raises the ceiling.
+- **Tool docstrings are billed on every executor call.** They are serialised
+  into the schema and re-sent each iteration of the ReAct loop. Prose
+  descriptions came to 3,758 tokens *per call*, ~37,600 per plan - a third of
+  a day's budget in tool descriptions alone. Keep docstrings terse and put
+  the reasoning in comments, which cost nothing. `get_tools_for_step` narrows
+  the toolbox by step kind on top of that; together they cut schema cost 68%.
+- **`create_agent` ignores callbacks bound to the model.**
+  `model.with_config(callbacks=...)` looks right and silently does nothing,
+  because `create_agent` builds its own graph around the model. Pass them in
+  the *invocation* config - `agent.ainvoke(..., {"callbacks": [...]})` - or
+  the executor's token usage reports as zero.
 - **Windows dev needs `python run.py`, not bare `uvicorn`.** uvicorn hardcodes
   `ProactorEventLoop` on Windows via a loop factory, and psycopg's async mode
   cannot use it - every DB call fails and the app silently falls back to

@@ -308,39 +308,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
       <div className="sticky bottom-0 space-y-2.5 bg-gradient-to-t from-[var(--color-paper)] via-[var(--color-paper)] to-transparent pb-5 pt-3">
         <TripBar trip={trip} />
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {SERVICES.map((service) => {
-            const enabled = focus.includes(service.id);
-            const Glyph = SERVICE_ICONS[service.id];
-            return (
-              <button
-                key={service.id}
-                type="button"
-                onClick={() => toggleService(service.id)}
-                aria-pressed={enabled}
-                title={
-                  enabled
-                    ? `${service.label} is on — the agent may use it`
-                    : `${service.label} is off — its tool is withheld from the agent`
-                }
-                className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors duration-200 ${
-                  enabled
-                    ? "border-[var(--color-brand)] bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand-strong)]"
-                    : "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-faint)]"
-                }`}
-              >
-                <Glyph size="1em" />
-                {service.label}
-                {/* Not colour alone: an off toggle also loses its check mark. */}
-                {enabled && <span aria-hidden>✓</span>}
-              </button>
-            );
-          })}
-          <span className="ml-auto hidden text-[11px] text-[var(--color-ink-faint)] sm:inline">
-            switched-off services are hidden from the agent
-          </span>
-        </div>
-
+        <IncludeControl focus={focus} onToggle={toggleService} />
         <TripDetailsPicker onInsert={insertPrompt} />
 
         <form
@@ -605,6 +573,124 @@ function Message({
     </div>
   );
 }
+
+/**
+ * Which services the agent may use, as one compact control.
+ *
+ * This replaced a permanent row of four always-on toggles, for reasons worth
+ * recording. All four defaulted to on, so in normal use they did nothing
+ * while occupying a full row directly above the composer. Worse, they looked
+ * uniform but were not: switching off Flights or Stays genuinely removes that
+ * tool from the model's toolbox, whereas Attractions and Restaurants share
+ * `find_places` with everything else and can only be enforced by instruction.
+ * Presenting a strong guarantee and a weak one as identical switches is the
+ * kind of small dishonesty that erodes trust in everything around it.
+ *
+ * So the row collapsed to a single button that states the current selection,
+ * opening a popover only when someone actually wants to exclude something -
+ * which is rare, and is the only case where these have any effect at all.
+ * The two enforcement strengths are labelled where they are chosen.
+ *
+ * The everyday path for "I just want flights" is not this control at all: it
+ * is the quick-action chips and the follow-up offers, which are phrased as
+ * things to do rather than capabilities to switch off.
+ */
+function IncludeControl({
+  focus,
+  onToggle,
+}: {
+  focus: FocusService[];
+  onToggle: (id: FocusService) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const all = focus.length === SERVICES.length;
+  const excluded = SERVICES.filter((service) => !focus.includes(service.id));
+
+  return (
+    <div className="relative flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors duration-200 ${
+          all
+            ? "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-soft)]"
+            : "border-[var(--color-brand)] bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand-strong)]"
+        }`}
+      >
+        <IconSparkle size="0.95em" />
+        {all ? "Including everything" : `Excluding ${excluded.length}`}
+        <IconChevron
+          size="0.8em"
+          className={`transition-transform duration-200 ${open ? "rotate-90" : ""}`}
+        />
+      </button>
+
+      {!all && (
+        <span className="text-[11px] text-[var(--color-ink-faint)]">
+          {excluded.map((service) => service.label).join(", ")} left out
+        </span>
+      )}
+
+      {open && (
+        <>
+          {/* Click-away layer. Rendered behind the panel so a click anywhere
+              else closes it without stealing the first click on a checkbox. */}
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-20 cursor-default"
+          />
+          <div className="absolute bottom-full left-0 z-30 mb-2 w-64 rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] p-3 shadow-[0_20px_50px_-24px_rgb(44_31_43_/_0.5)]">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              Include in plans
+            </p>
+            <ul className="space-y-0.5">
+              {SERVICES.map((service) => {
+                const on = focus.includes(service.id);
+                const Glyph = SERVICE_ICONS[service.id];
+                const enforced = service.id === "flights" || service.id === "stays";
+                return (
+                  <li key={service.id}>
+                    <button
+                      type="button"
+                      onClick={() => onToggle(service.id)}
+                      aria-pressed={on}
+                      className="flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2 text-left text-xs transition-colors duration-200 hover:bg-[var(--color-surface-2)]"
+                    >
+                      <span
+                        className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-[9px] ${
+                          on
+                            ? "border-[var(--color-brand-strong)] bg-[var(--color-brand-strong)] text-white"
+                            : "border-[var(--color-line-strong)]"
+                        }`}
+                        aria-hidden
+                      >
+                        {on ? "✓" : ""}
+                      </span>
+                      <Glyph size="1em" />
+                      <span className="flex-1">{service.label}</span>
+                      <span className="text-[9px] text-[var(--color-ink-faint)]">
+                        {enforced ? "enforced" : "guided"}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="mt-2 border-t border-[var(--color-line)] pt-2 text-[10px] leading-relaxed text-[var(--color-ink-faint)]">
+              <strong>Enforced</strong> removes the tool entirely.{" "}
+              <strong>Guided</strong> shares a tool with the rest of planning, so
+              it is asked for rather than withheld.
+            </p>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 
 /**
  * "Want me to also…" offers under a reply.

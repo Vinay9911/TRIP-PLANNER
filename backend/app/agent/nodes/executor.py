@@ -35,7 +35,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError, RateLimitError
 from app.core.logging import get_logger
 from app.tools.base import ToolCallRecord
-from app.tools.registry import get_tools
+from app.tools.registry import get_tools_for_step
 
 logger = get_logger(__name__)
 
@@ -113,7 +113,7 @@ async def executor_node(
     prompt = _build_step_prompt(state, step)
 
     try:
-        output = await _run_step_agent(prompt, cfg, focus=state.get("focus"))
+        output = await _run_step_agent(prompt, cfg, focus=state.get("focus"), kind=step.kind)
         succeeded, error = True, None
 
     except TimeoutError:
@@ -189,7 +189,9 @@ def _seconds_until_a_key_frees(pool: object) -> float:
     )
 
 
-async def _run_step_agent(prompt: str, cfg: Settings, *, focus: list[str] | None = None) -> str:
+async def _run_step_agent(
+    prompt: str, cfg: Settings, *, focus: list[str] | None = None, kind: str = "research"
+) -> str:
     """Run one step through a `create_agent` instance, rotating keys on 429.
 
     `create_agent` owns its internal tool-calling loop and holds whichever key
@@ -202,6 +204,8 @@ async def _run_step_agent(prompt: str, cfg: Settings, *, focus: list[str] | None
         cfg: Application settings.
         focus: Services the traveller enabled; a switched-off service's tool
             is withheld from the model entirely.
+        kind: The plan step's kind, which narrows the toolbox to what that
+            kind of work can use - see `get_tools_for_step`.
 
     Returns:
         The executor's textual findings.
@@ -213,15 +217,24 @@ async def _run_step_agent(prompt: str, cfg: Settings, *, focus: list[str] | None
     """
     from langchain.agents import create_agent
 
-    from app.services.llm import ModelRole, get_llm_pool, get_model
+    from app.services.llm import (
+        ModelRole,
+        UsageRecordingCallback,
+        get_llm_pool,
+        get_model,
+    )
 
     pool = get_llm_pool(cfg)
     attempts = max(pool.size, 1) + 1
 
     for attempt in range(1, attempts + 1):
-        # Every key cooling down. The binding Groq limit is per-minute, so a
-        # short wait usually restores one - much better than failing a step the
-        # rest of the plan depends on.
+        # Every key cooling down. A per-minute limit clears in seconds, so a
+        # short wait usually restores one - much better than failing a step
+        # the rest of the plan depends on. A key that has spent its *daily*
+        # allowance is parked for far longer than this wait (see
+        # `DAILY_LIMIT_COOLDOWN_SECONDS`), so this will not sit spinning on an
+        # exhausted pool: the wait is capped and the attempt then fails
+        # honestly.
         if pool.available_count() == 0:
             wait = min(_seconds_until_a_key_frees(pool), 25.0)
             if wait > 0 and attempt < attempts:
@@ -230,7 +243,7 @@ async def _run_step_agent(prompt: str, cfg: Settings, *, focus: list[str] | None
 
         agent = create_agent(
             model=get_model(ModelRole.EXECUTOR, settings=cfg),
-            tools=get_tools(focus=focus),
+            tools=get_tools_for_step(kind, focus=focus),
             system_prompt=EXECUTOR_PROMPT,
         )
 
@@ -240,9 +253,17 @@ async def _run_step_agent(prompt: str, cfg: Settings, *, focus: list[str] | None
             response = await asyncio.wait_for(
                 agent.ainvoke(
                     {"messages": [HumanMessage(content=prompt)]},
-                    # Bounds the ReAct loop inside the step, independently of
-                    # the outer plan budget. Two graph steps per tool round trip.
-                    {"recursion_limit": cfg.agent_max_tool_calls_per_step * 2 + 2},
+                    {
+                        # Bounds the ReAct loop inside the step, independently
+                        # of the outer plan budget. Two graph steps per tool
+                        # round trip.
+                        "recursion_limit": cfg.agent_max_tool_calls_per_step * 2 + 2,
+                        # The only level at which LangChain propagates a
+                        # handler down into the model calls `create_agent`
+                        # makes internally. Without it the executor - the
+                        # single largest token consumer here - reports zero.
+                        "callbacks": [UsageRecordingCallback()],
+                    },
                 ),
                 timeout=cfg.agent_step_timeout_seconds,
             )
