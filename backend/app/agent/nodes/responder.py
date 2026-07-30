@@ -25,16 +25,18 @@ Japanese.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Final
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from app.agent.itinerary import ITINERARY_INSTRUCTIONS, Itinerary
+from app.agent.itinerary import ITINERARY_INSTRUCTIONS, Itinerary, ItineraryItem
 from app.agent.state import AgentState
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
+from app.services.geocoding import geocode_landmark
 from app.services.llm import ModelRole, call_model, structured_call
 
 logger = get_logger(__name__)
@@ -357,7 +359,49 @@ async def _compose_itinerary(
 
     if not itinerary.days:
         return None
+
+    await _add_missing_coordinates(itinerary)
     return itinerary
+
+
+#: Items to geocode per plan. A ten-day trip can list fifty places, and the
+#: map is legible long before that; this bounds the work without materially
+#: affecting what a traveller sees.
+MAX_GEOCODED_ITEMS = 24
+
+
+async def _add_missing_coordinates(itinerary: Itinerary) -> None:
+    """Look up coordinates for itinerary items that have none.
+
+    Without this the map is almost always empty. Items only carry coordinates
+    when they came from `find_places`, and a plan built from guide research
+    and web search - which is the common case, measured on a real Pune run -
+    produces eleven named places and not one map pin. Asking the model to
+    call a different tool is unreliable; looking the names up afterwards is
+    deterministic.
+
+    Uses the same keyless Open-Meteo geocoder as the weather tool, in
+    parallel, and silently leaves an item unplaced if it cannot be resolved -
+    a missing pin costs one marker, while a wrong pin is worse than none.
+
+    Args:
+        itinerary: The composed plan, mutated in place.
+    """
+    pending = [item for item in itinerary.all_items() if item.latitude is None][:MAX_GEOCODED_ITEMS]
+    if not pending:
+        return
+
+    async def locate(item: ItineraryItem) -> None:
+        # Qualified with the destination inside `geocode_landmark`: "Old Town"
+        # alone matches a hundred places, "Old Town, Geneva" matches one.
+        located = await geocode_landmark(item.name, near=itinerary.destination)
+        if located is not None:
+            item.latitude, item.longitude = located
+
+    await asyncio.gather(*(locate(item) for item in pending), return_exceptions=True)
+
+    located = sum(1 for item in itinerary.all_items() if item.latitude is not None)
+    logger.info("agent.itinerary_geocoded", located=located, of=len(itinerary.all_items()))
 
 
 def _itinerary_response(state: AgentState, itinerary: Itinerary) -> AgentState:

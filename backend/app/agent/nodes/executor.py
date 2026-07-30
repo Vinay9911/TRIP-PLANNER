@@ -222,10 +222,20 @@ async def _run_step_agent(
         UsageRecordingCallback,
         get_llm_pool,
         get_model,
+        models_for_role,
     )
 
     pool = get_llm_pool(cfg)
-    attempts = max(pool.size, 1) + 1
+
+    # Groq's daily token budget is per model, so an exhausted bucket is not
+    # the end of the road: the same key can still serve a different model.
+    # This step is by far the heaviest consumer in the system, and it sits on
+    # one of the smallest daily allowances, so the fallback matters most here.
+    candidates = models_for_role(ModelRole.EXECUTOR, cfg)
+    model_index = 0
+
+    # One attempt per key on each candidate model, plus a little slack.
+    attempts = max(pool.size, 1) * len(candidates) + 1
 
     for attempt in range(1, attempts + 1):
         # Every key cooling down. A per-minute limit clears in seconds, so a
@@ -242,7 +252,7 @@ async def _run_step_agent(
                 await asyncio.sleep(wait + 0.5)
 
         agent = create_agent(
-            model=get_model(ModelRole.EXECUTOR, settings=cfg),
+            model=get_model(ModelRole.EXECUTOR, settings=cfg, model_name=candidates[model_index]),
             tools=get_tools_for_step(kind, focus=focus),
             system_prompt=EXECUTOR_PROMPT,
         )
@@ -275,7 +285,16 @@ async def _run_step_agent(
                 raise
             error = _classify_provider_error(exc)
             if isinstance(error, RateLimitError) and attempt < attempts:
-                logger.info("agent.step_key_rotated", attempt=attempt, of=attempts)
+                # A daily exhaustion belongs to the model, not the key, so
+                # every key would hit the same wall. Step to the next model
+                # instead; a per-minute limit still just rotates keys.
+                if (error.details or {}).get("scope") == "per_day" and model_index + 1 < len(
+                    candidates
+                ):
+                    model_index += 1
+                    logger.info("agent.step_model_fallback", now_using=candidates[model_index])
+                else:
+                    logger.info("agent.step_key_rotated", attempt=attempt, of=attempts)
                 continue
             raise error from exc
 

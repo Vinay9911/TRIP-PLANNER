@@ -24,7 +24,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.config import Settings, get_settings
+from app.core.logging import get_logger
 from app.services.http import request_json
+
+logger = get_logger(__name__)
 
 
 async def geocode_place(place: str, *, settings: Settings | None = None) -> dict[str, Any] | None:
@@ -86,3 +89,58 @@ async def geocode_place(place: str, *, settings: Settings | None = None) -> dict
         "timezone": top.get("timezone"),
         "population": top.get("population"),
     }
+
+
+async def geocode_landmark(
+    name: str, *, near: str | None = None, settings: Settings | None = None
+) -> tuple[float, float] | None:
+    """Resolve a named landmark, venue or district to coordinates.
+
+    Separate from `geocode_place` because the two answer different questions.
+    Open-Meteo's geocoder is a gazetteer of *populated places* - excellent for
+    "Kyoto", useless for "Shaniwar Wada", which it simply does not contain.
+    Measured against a real Pune itinerary it resolved zero of eleven named
+    stops, which is why the itinerary map was always empty.
+
+    Geoapify indexes points of interest and resolved the same landmarks to
+    within a street. It uses the key this project already configures for
+    `find_places`, so this adds no new credential.
+
+    Args:
+        name: The landmark, venue or district.
+        near: Surrounding city, which disambiguates enormously - "Old Town"
+            matches everywhere, "Old Town, Geneva" matches once.
+        settings: Settings override, for tests.
+
+    Returns:
+        A (latitude, longitude) pair, or None when nothing matched or the
+        lookup failed. Never raises: a missing pin is a cosmetic loss, and a
+        wrong pin is worse than no pin.
+    """
+    cfg = settings or get_settings()
+    key = cfg.geoapify_api_key.get_secret_value()
+    if not key:
+        return None
+
+    query = f"{name}, {near}" if near else name
+
+    try:
+        payload = await request_json(
+            "GET",
+            "https://api.geoapify.com/v1/geocode/search",
+            service="geoapify-geocode",
+            params={"text": query, "limit": "1", "apiKey": key},
+        )
+    except Exception:  # noqa: BLE001 - see the docstring; pins are never fatal
+        logger.info("geocoding.landmark_failed", name=name)
+        return None
+
+    features = payload.get("features") or []
+    if not features:
+        return None
+
+    properties = features[0].get("properties") or {}
+    latitude, longitude = properties.get("lat"), properties.get("lon")
+    if latitude is None or longitude is None:
+        return None
+    return float(latitude), float(longitude)

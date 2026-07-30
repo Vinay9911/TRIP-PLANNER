@@ -202,6 +202,50 @@ def get_llm_pool(settings: Settings | None = None) -> KeyPool:
     return get_pool("groq", cfg.groq_api_key.get_secret_value())
 
 
+#: Models to fall back to, per role, when the primary's daily bucket is spent.
+#:
+#: Groq meters **tokens per day per model**, not per account, and the buckets
+#: differ sharply in size: `llama-3.1-8b-instant` allows 14,400 requests a day
+#: against 1,000 for the larger models. The original role mapping had this
+#: exactly backwards - the executor, which makes by far the most calls with
+#: the largest prompts, sat on one of the smallest daily allowances, while the
+#: roomiest model was reserved for occasional classification work.
+#:
+#: Rather than reassign roles and lose the quality reasons behind them, each
+#: role now has somewhere to go when its own bucket runs dry. A degraded model
+#: producing an answer beats a well-chosen model producing a rate-limit
+#: message, and the fallbacks are ordered so quality drops as late as possible.
+_MODEL_FALLBACKS: dict[ModelRole, tuple[str, ...]] = {
+    ModelRole.PLANNER: ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"),
+    ModelRole.EXECUTOR: ("openai/gpt-oss-120b", "llama-3.1-8b-instant"),
+    ModelRole.UTILITY: ("openai/gpt-oss-20b", "llama-3.3-70b-versatile"),
+}
+
+
+def models_for_role(role: ModelRole, cfg: Settings) -> list[str]:
+    """The models to try for a role, best first.
+
+    Args:
+        role: Which class of work the call belongs to.
+        cfg: Application settings.
+
+    Returns:
+        The configured primary followed by its fallbacks, without duplicates -
+        a deployment that points two roles at the same model should not try it
+        twice.
+    """
+    primary, _ = _resolve_role(role, cfg, None)
+    ordered = [primary, *_MODEL_FALLBACKS.get(role, ())]
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in ordered:
+        if name not in seen:
+            seen.add(name)
+            unique.append(name)
+    return unique
+
+
 def _resolve_role(role: ModelRole, cfg: Settings, temperature: float | None) -> tuple[str, float]:
     """Map a role onto its model name and sampling temperature.
 
@@ -234,7 +278,11 @@ def _resolve_role(role: ModelRole, cfg: Settings, temperature: float | None) -> 
 
 
 def get_model(
-    role: ModelRole, *, settings: Settings | None = None, temperature: float | None = None
+    role: ModelRole,
+    *,
+    settings: Settings | None = None,
+    temperature: float | None = None,
+    model_name: str | None = None,
 ) -> BaseChatModel:
     """Return a chat model for a role, bound to one key from the pool.
 
@@ -251,6 +299,10 @@ def get_model(
         role: Which class of work the call belongs to.
         settings: Settings override, for tests.
         temperature: Sampling override.
+        model_name: Use this model instead of the role's default. The executor
+            passes one when stepping down its fallback chain, since Groq's
+            daily budget is per model and a spent bucket is escaped by
+            changing model rather than by changing key.
 
     Returns:
         A ready-to-use chat model.
@@ -259,11 +311,11 @@ def get_model(
         AllKeysExhausted: If every key is currently cooling down.
     """
     cfg = settings or get_settings()
-    model_name, resolved_temperature = _resolve_role(role, cfg, temperature)
+    default_model, resolved_temperature = _resolve_role(role, cfg, temperature)
 
     model = _build_model(
         role=role,
-        model_name=model_name,
+        model_name=model_name or default_model,
         temperature=resolved_temperature,
         timeout=cfg.llm_timeout_seconds,
         api_key=get_llm_pool(cfg).acquire(),
@@ -377,7 +429,17 @@ async def _invoke_rotating(
         ExternalServiceError: If every attempt failed for another reason.
     """
     pool = get_llm_pool(cfg)
-    model_name, resolved_temperature = _resolve_role(role, cfg, temperature)
+    _, resolved_temperature = _resolve_role(role, cfg, temperature)
+
+    # Groq's daily token budget is per *model*, so a spent bucket is not the
+    # end of the road - the same key can still serve a different model. The
+    # candidate list is walked only on daily exhaustion; a per-minute limit or
+    # a transient fault is handled by rotating keys on the current model,
+    # which is both cheaper and keeps output quality where it was chosen.
+    candidates = models_for_role(role, cfg)
+    model_name = candidates[0]
+    exhausted_models: set[str] = set()
+
     attempts = max_attempts or (pool.size + 2)
 
     last_error: Exception | None = None
@@ -422,6 +484,25 @@ async def _invoke_rotating(
 
             if isinstance(error, RateLimitError):
                 pool.report_rate_limited(api_key, error.retry_after_seconds)
+                daily = (error.details or {}).get("scope") == "per_day"
+
+                # A daily exhaustion follows the *model*, not the key, so
+                # rotating keys alone would hit the same wall on every one of
+                # them. Move to the next model in the role's list instead, and
+                # only give up once they are all spent.
+                if daily:
+                    exhausted_models.add(model_name)
+                    remaining = [m for m in candidates if m not in exhausted_models]
+                    if remaining:
+                        model_name = remaining[0]
+                        logger.info(
+                            "llm.model_fallback",
+                            purpose=purpose,
+                            spent=sorted(exhausted_models),
+                            now_using=model_name,
+                        )
+                        continue
+
                 logger.info(
                     "llm.key_rotated",
                     purpose=purpose,

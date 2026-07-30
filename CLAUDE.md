@@ -113,8 +113,11 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
   An earlier diagnosis was wrong for exactly this reason. Per-minute limits
   differ per model: planner `gpt-oss-120b` 8,000 TPM, executor
   `llama-3.3-70b-versatile` 12,000, utility `llama-3.1-8b-instant` 6,000.
-  Keys from **separate accounts** each get their own 100,000/day, so more
-  accounts is the only lever that raises the ceiling.
+  Keys from **separate accounts** each get their own 100,000/day. The budget
+  is also **per model**, so `models_for_role` steps down a fallback chain when
+  one model's bucket is spent - the executor is the heaviest consumer and sat
+  on one of the smallest allowances. The reset is a rolling 24-hour window,
+  not a calendar day: nothing frees up at midnight.
 - **Tool docstrings are billed on every executor call.** They are serialised
   into the schema and re-sent each iteration of the ReAct loop. Prose
   descriptions came to 3,758 tokens *per call*, ~37,600 per plan - a third of
@@ -145,6 +148,16 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
 - **Open-Meteo's geocoder ranks by relevance, not size.** `count=1` for
   "Bali" returns a village in West Bengal ahead of the Indonesian island.
   `services/geocoding.py` asks for 10 and picks the most populous.
+- **Two geocoders, and they are not interchangeable.** Open-Meteo indexes
+  *populated places* - great for "Kyoto", and it returns nothing at all for
+  "Shaniwar Wada". Geoapify indexes points of interest. Itinerary pins use
+  `geocode_landmark` (Geoapify); weather and the mock provider use
+  `geocode_place` (Open-Meteo). Measured: Open-Meteo resolved 0 of 11 stops
+  on a real Pune plan, Geoapify resolved all of them.
+- **Itinerary coordinates are backfilled, not hoped for.** Items only carry
+  coordinates when they came from `find_places`, and a plan built from guide
+  research and web search produces none - so the map was always empty. The
+  responder geocodes the composed itinerary before returning it.
 - **Cast arguments to Postgres functions explicitly** (`%s::uuid`, `%s::int`,
   `%s::real`). psycopg infers `smallint` from a small int and `double
   precision` from a float, neither of which matches the `integer`/`real`
