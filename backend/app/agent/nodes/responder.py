@@ -36,7 +36,7 @@ from app.agent.state import AgentState
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
-from app.services.geocoding import geocode_landmark
+from app.services.geocoding import geocode_landmark, geocode_place
 from app.services.llm import ModelRole, call_model, structured_call
 
 logger = get_logger(__name__)
@@ -380,9 +380,15 @@ async def _add_missing_coordinates(itinerary: Itinerary) -> None:
     call a different tool is unreliable; looking the names up afterwards is
     deterministic.
 
-    Uses the same keyless Open-Meteo geocoder as the weather tool, in
-    parallel, and silently leaves an item unplaced if it cannot be resolved -
-    a missing pin costs one marker, while a wrong pin is worse than none.
+    Runs the lookups in parallel and silently leaves an item unplaced if it
+    cannot be resolved - a missing pin costs one marker, while a wrong pin is
+    worse than none.
+
+    The destination is resolved once up front and passed down as the search
+    centre. That single extra call is what makes the "worse than none" case
+    rare: without it a Jaipur plan pinned Jaigarh Fort in Maharashtra and the
+    zoological garden in Myanmar, because a name-only match has the whole
+    planet to choose from.
 
     Args:
         itinerary: The composed plan, mutated in place.
@@ -391,10 +397,19 @@ async def _add_missing_coordinates(itinerary: Itinerary) -> None:
     if not pending:
         return
 
+    centre: tuple[float, float] | None = None
+    try:
+        place = await geocode_place(itinerary.destination)
+    except ExternalServiceError:
+        place = None
+    if place and place.get("latitude") is not None:
+        centre = (float(place["latitude"]), float(place["longitude"]))
+
     async def locate(item: ItineraryItem) -> None:
         # Qualified with the destination inside `geocode_landmark`: "Old Town"
-        # alone matches a hundred places, "Old Town, Geneva" matches one.
-        located = await geocode_landmark(item.name, near=itinerary.destination)
+        # alone matches a hundred places, "Old Town, Geneva" matches one. The
+        # centre then enforces what the qualifier only suggests.
+        located = await geocode_landmark(item.name, near=itinerary.destination, centre=centre)
         if located is not None:
             item.latitude, item.longitude = located
 

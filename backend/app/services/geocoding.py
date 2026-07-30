@@ -21,6 +21,7 @@ can never cover every destination a traveller might name.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from app.core.config import Settings, get_settings
@@ -28,6 +29,41 @@ from app.core.logging import get_logger
 from app.services.http import request_json
 
 logger = get_logger(__name__)
+
+
+#: How far from the destination centre a resolved pin may sit before it is
+#: treated as a mismatch rather than a day trip.
+#:
+#: Geocoders return a best-effort match for any string, and for an ambiguous
+#: landmark name that match can be on another continent. A real Jaipur plan
+#: placed "Jaigarh Fort" in Maharashtra, 1,000km away, and its zoological
+#: garden in Myanmar - both rendered as confident pins. A wrong pin is worse
+#: than a missing one, because the map looks authoritative either way.
+#:
+#: 300km is deliberately generous: it comfortably contains a day trip from any
+#: city, and multi-city regional itineraries too, while still catching the
+#: wrong-country class of error that actually occurs.
+MAX_PIN_DISTANCE_KM: float = 300.0
+
+EARTH_RADIUS_KM: float = 6371.0
+
+
+def distance_km(first: tuple[float, float], second: tuple[float, float]) -> float:
+    """Great-circle distance between two (latitude, longitude) points.
+
+    Args:
+        first: Latitude and longitude in degrees.
+        second: Latitude and longitude in degrees.
+
+    Returns:
+        Distance in kilometres.
+    """
+    lat1, lon1 = math.radians(first[0]), math.radians(first[1])
+    lat2, lon2 = math.radians(second[0]), math.radians(second[1])
+    d_lat, d_lon = lat2 - lat1, lon2 - lon1
+
+    a = math.sin(d_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(d_lon / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(a))
 
 
 async def geocode_place(place: str, *, settings: Settings | None = None) -> dict[str, Any] | None:
@@ -92,7 +128,11 @@ async def geocode_place(place: str, *, settings: Settings | None = None) -> dict
 
 
 async def geocode_landmark(
-    name: str, *, near: str | None = None, settings: Settings | None = None
+    name: str,
+    *,
+    near: str | None = None,
+    centre: tuple[float, float] | None = None,
+    settings: Settings | None = None,
 ) -> tuple[float, float] | None:
     """Resolve a named landmark, venue or district to coordinates.
 
@@ -106,16 +146,27 @@ async def geocode_landmark(
     within a street. It uses the key this project already configures for
     `find_places`, so this adds no new credential.
 
+    **`centre` is what stops it lying.** Appending the city to the query is a
+    hint, not a constraint: Geoapify still returns its single best global
+    match, and for a landmark whose name is not unique that match can be
+    anywhere. A live Jaipur plan put "Jaigarh Fort" in Maharashtra and its
+    zoological garden in Myanmar - both as confident pins on the map. Passing
+    the destination's own coordinates biases the search and lets an obviously
+    distant result be thrown away.
+
     Args:
         name: The landmark, venue or district.
         near: Surrounding city, which disambiguates enormously - "Old Town"
             matches everywhere, "Old Town, Geneva" matches once.
+        centre: The destination's (latitude, longitude), when known. Biases
+            the search toward it and rejects matches beyond
+            `MAX_PIN_DISTANCE_KM`.
         settings: Settings override, for tests.
 
     Returns:
-        A (latitude, longitude) pair, or None when nothing matched or the
-        lookup failed. Never raises: a missing pin is a cosmetic loss, and a
-        wrong pin is worse than no pin.
+        A (latitude, longitude) pair, or None when nothing matched, the match
+        was implausibly far from `centre`, or the lookup failed. Never raises:
+        a missing pin is a cosmetic loss, and a wrong pin is worse than no pin.
     """
     cfg = settings or get_settings()
     key = cfg.geoapify_api_key.get_secret_value()
@@ -123,13 +174,21 @@ async def geocode_landmark(
         return None
 
     query = f"{name}, {near}" if near else name
+    params = {"text": query, "limit": "1", "apiKey": key}
+
+    if centre is not None:
+        # Geoapify orders bias coordinates lon,lat - the opposite of the
+        # lat,lon this codebase passes everywhere else. Getting it backwards
+        # is silent: the bias just points somewhere useless and results look
+        # unbiased rather than wrong.
+        params["bias"] = f"proximity:{centre[1]},{centre[0]}"
 
     try:
         payload = await request_json(
             "GET",
             "https://api.geoapify.com/v1/geocode/search",
             service="geoapify-geocode",
-            params={"text": query, "limit": "1", "apiKey": key},
+            params=params,
         )
     except Exception:  # noqa: BLE001 - see the docstring; pins are never fatal
         logger.info("geocoding.landmark_failed", name=name)
@@ -143,4 +202,21 @@ async def geocode_landmark(
     latitude, longitude = properties.get("lat"), properties.get("lon")
     if latitude is None or longitude is None:
         return None
-    return float(latitude), float(longitude)
+
+    found = (float(latitude), float(longitude))
+
+    # The bias is only a preference - Geoapify still answers with its best
+    # global match when nothing near the centre fits. This is the part that
+    # actually enforces plausibility.
+    if centre is not None:
+        separation = distance_km(centre, found)
+        if separation > MAX_PIN_DISTANCE_KM:
+            logger.info(
+                "geocoding.landmark_rejected",
+                name=name,
+                distance_km=round(separation),
+                limit_km=MAX_PIN_DISTANCE_KM,
+            )
+            return None
+
+    return found
