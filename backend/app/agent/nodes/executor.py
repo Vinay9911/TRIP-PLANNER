@@ -26,9 +26,12 @@ for keywords and pre-selects tools.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.tools import BaseTool, StructuredTool
 
 from app.agent.state import AgentState, PlanStep, StepResult
 from app.core.config import Settings, get_settings
@@ -189,6 +192,69 @@ def _seconds_until_a_key_frees(pool: object) -> float:
     )
 
 
+def _budgeted_tools(tools: list[BaseTool], *, budget: int) -> list[BaseTool]:
+    """Cap how many tool calls one step may actually make, and never repeat one.
+
+    `recursion_limit` looks like it already does this and does not. It counts
+    LangGraph super-steps, and every tool call the model requests in a single
+    assistant message runs inside *one* super-step. Groq's models call tools in
+    parallel, so a limit of ten super-steps permitted 43 tool calls in one
+    observed step: a 10-day New York plan searched accommodation 43 times,
+    took 194 seconds against a 90-second setting, and cost 156,870 tokens -
+    more than a model's entire daily allowance for a single reply.
+
+    Two guards, because the trace showed two distinct wastes:
+
+    - **A hard count.** Once the budget is spent, further calls return an
+      instruction rather than running. The model is told to answer from what
+      it has, which is the one message that reliably ends a ReAct loop; a bare
+      error makes models retry.
+    - **A memo.** Of those 43 calls, most were duplicates - "Lake Placid, NY"
+      with identical dates recurred eight times. A repeat is answered from the
+      first result at no cost and does not count against the budget, since
+      refusing it would punish the model for a question already answered.
+
+    Args:
+        tools: The step's toolbox.
+        budget: Maximum distinct tool calls allowed for this step.
+
+    Returns:
+        Wrapped tools sharing one budget and one memo.
+    """
+    spent = 0
+    memo: dict[tuple[str, str], Any] = {}
+
+    def wrap(base: BaseTool) -> BaseTool:
+        async def run(**kwargs: Any) -> Any:
+            nonlocal spent
+            key = (base.name, json.dumps(kwargs, sort_keys=True, default=str))
+            if key in memo:
+                logger.info("agent.tool_call_deduped", tool=base.name)
+                return memo[key]
+
+            if spent >= budget:
+                logger.info("agent.tool_budget_spent", tool=base.name, budget=budget)
+                return (
+                    f"Tool budget for this step is used up ({budget} calls). "
+                    "Do not call any more tools. Write your findings now from "
+                    "what you already have, and say plainly what is missing."
+                )
+
+            spent += 1
+            result = await base.ainvoke(kwargs)
+            memo[key] = result
+            return result
+
+        return StructuredTool(
+            name=base.name,
+            description=base.description,
+            args_schema=base.args_schema,
+            coroutine=run,
+        )
+
+    return [wrap(base) for base in tools]
+
+
 async def _run_step_agent(
     prompt: str, cfg: Settings, *, focus: list[str] | None = None, kind: str = "research"
 ) -> str:
@@ -237,6 +303,11 @@ async def _run_step_agent(
     # One attempt per key on each candidate model, plus a little slack.
     attempts = max(pool.size, 1) * len(candidates) + 1
 
+    # The deadline belongs to the *step*, not to an attempt. Applying the
+    # timeout per attempt let one step run 194s against a 90s setting, because
+    # every key rotation started the clock again.
+    deadline = time.monotonic() + cfg.agent_step_timeout_seconds
+
     for attempt in range(1, attempts + 1):
         # Every key cooling down. A per-minute limit clears in seconds, so a
         # short wait usually restores one - much better than failing a step
@@ -251,9 +322,16 @@ async def _run_step_agent(
                 logger.info("agent.step_waiting_for_key", seconds=round(wait, 1))
                 await asyncio.sleep(wait + 0.5)
 
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"step exceeded {cfg.agent_step_timeout_seconds}s")
+
         agent = create_agent(
             model=get_model(ModelRole.EXECUTOR, settings=cfg, model_name=candidates[model_index]),
-            tools=get_tools_for_step(kind, focus=focus),
+            tools=_budgeted_tools(
+                get_tools_for_step(kind, focus=focus),
+                budget=cfg.agent_max_tool_calls_per_step,
+            ),
             system_prompt=EXECUTOR_PROMPT,
         )
 
@@ -264,9 +342,11 @@ async def _run_step_agent(
                 agent.ainvoke(
                     {"messages": [HumanMessage(content=prompt)]},
                     {
-                        # Bounds the ReAct loop inside the step, independently
-                        # of the outer plan budget. Two graph steps per tool
-                        # round trip.
+                        # Bounds the ReAct *loop*, but not the number of tools
+                        # called: a single super-step runs every tool call in
+                        # one assistant message, so parallel calling escapes
+                        # this entirely. `_budgeted_tools` is what actually
+                        # caps the count - see the note there.
                         "recursion_limit": cfg.agent_max_tool_calls_per_step * 2 + 2,
                         # The only level at which LangChain propagates a
                         # handler down into the model calls `create_agent`
@@ -275,7 +355,7 @@ async def _run_step_agent(
                         "callbacks": [UsageRecordingCallback()],
                     },
                 ),
-                timeout=cfg.agent_step_timeout_seconds,
+                timeout=remaining,
             )
         except Exception as exc:
             # Normalised so a quota failure can be told from anything else.
