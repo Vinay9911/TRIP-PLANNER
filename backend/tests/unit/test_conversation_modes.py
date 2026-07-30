@@ -55,8 +55,19 @@ def test_no_destination_clarifies():
     assert mode == "clarify"
 
 
-def test_ambiguous_request_clarifies_even_with_a_destination():
-    """The understanding step's ambiguity judgement always wins."""
+def test_a_known_destination_outranks_the_models_urge_to_ask():
+    """Reversed deliberately - this rule used to read "the model always wins".
+
+    It was wrong, and a real transcript showed why: after "planning trip to
+    usa", the message "nature budget any date 8 august 2026 10 days" came back
+    as "Which city or country did you have in mind?". The model set
+    `needs_clarification` despite a prompt that forbids re-asking, and that
+    flag outranked a destination the traveller had already given.
+
+    With somewhere to go, an advisory turn can always narrow it, which is a
+    better use of the turn than a question. The case that genuinely cannot
+    proceed - flights with no origin - is checked in code below.
+    """
     mode = decide_mode(
         needs_clarification=True,
         destination="Kerala",
@@ -64,7 +75,7 @@ def test_ambiguous_request_clarifies_even_with_a_destination():
         scoped_service="none",
         trip_state={"destination": "Kerala"},
     )
-    assert mode == "clarify"
+    assert mode == "advise"
 
 
 def test_fully_specified_first_message_plans_immediately():
@@ -423,4 +434,56 @@ async def test_advisor_grounds_its_options_in_the_retrieved_districts(monkeypatc
     assert update["suggested_options"] == ["Alappuzha", "Munnar", "Kochi"], (
         "the frontend needs real, retrieved district names to render as clickable "
         "chips - not names parsed back out of the model's prose"
+    )
+
+
+def test_known_destination_beats_a_model_asking_again() -> None:
+    """The USA case: a country is a destination, so narrowing it is advice.
+
+    Turn 1 said "planning trip to usa". Turn 2 said "nature budget any date
+    8 august 2026 10 days" and was answered with "Which city or country did
+    you have in mind?" - because the model set needs_clarification and that
+    flag used to outrank the ledger. It must not: the traveller named their
+    destination in the first sentence.
+    """
+    mode = decide_mode(
+        needs_clarification=True,
+        destination="USA",
+        wants_full_plan=False,
+        scoped_service="none",
+        trip_state={"destination": "USA", "priorities": ["nature"]},
+    )
+
+    assert mode == "advise"
+
+
+def test_clarify_still_fires_when_there_is_no_destination() -> None:
+    """Overriding the model must not disable the one case that needs it."""
+    assert (
+        decide_mode(
+            needs_clarification=True,
+            destination=None,
+            wants_full_plan=False,
+            scoped_service="none",
+            trip_state={},
+        )
+        == "clarify"
+    )
+
+
+def test_flights_without_an_origin_still_clarify() -> None:
+    """The genuinely-blocked case is enforced in code, not by model judgement.
+
+    This is what makes ignoring `needs_clarification` safe: the one request
+    that truly cannot proceed is checked against the slot ledger instead.
+    """
+    assert (
+        decide_mode(
+            needs_clarification=False,
+            destination="London",
+            wants_full_plan=False,
+            scoped_service="flights",
+            trip_state={"destination": "London"},
+        )
+        == "clarify"
     )

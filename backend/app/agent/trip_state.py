@@ -46,6 +46,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 AgentMode = Literal["clarify", "advise", "plan"]
 
 #: Services the traveller can switch on and off in the composer. `flights`
@@ -191,7 +195,10 @@ def decide_mode(
 
     The rules, in the order they apply, each one sentence:
 
-    1. No usable destination or a genuinely ambiguous request -> clarify.
+    1. No usable destination -> clarify. Note "no destination", not "the
+       model wants to ask something": once a destination is known this never
+       clarifies, because every question the model reaches for at that point
+       has already been answered or has a workable default.
     2. A scoped request (flights, a stay, weather) missing the one slot it
        cannot work without -> clarify, so the agent asks a real question
        instead of running a plan with a blank argument or inventing a
@@ -227,8 +234,25 @@ def decide_mode(
     Returns:
         The gear to run this turn in.
     """
-    if needs_clarification or not destination:
+    if not destination:
         return "clarify"
+
+    # Deliberately NOT `needs_clarification or not destination`. That let the
+    # model's judgement override the ledger, and it did: after "trip to usa",
+    # the message "nature budget any date 8 august 2026 10 days" was answered
+    # with "Which city or country did you have in mind?" - a question the
+    # traveller had already answered in their first sentence. The prompt tells
+    # the model not to do this and the model did it anyway, which is the whole
+    # reason gear selection is code here rather than judgement.
+    #
+    # Once a destination is known there is always a useful turn available:
+    # narrow a country in the advise gear, or plan with stated assumptions.
+    # The one case that genuinely cannot proceed - a flight with no departure
+    # city - is rule 2 below, enforced in code against the slot ledger rather
+    # than left to the model to remember.
+    if needs_clarification:
+        logger.info("trip_state.clarification_overridden", destination=destination)
+
     if scoped_service and scoped_service != "none":
         required_slot = REQUIRED_SLOT_FOR_SCOPED_SERVICE.get(scoped_service)
         if required_slot and not trip_state.get(required_slot):

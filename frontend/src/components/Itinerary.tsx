@@ -316,7 +316,10 @@ function Day({
 
 export function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
   const destination = itinerary.destination;
-  const [showMap, setShowMap] = useState(false);
+  // Open by default. Hidden-by-default lost the feature entirely: the map is
+  // the most useful thing on the screen for judging whether a plan makes
+  // geographic sense, and behind a button nobody found it.
+  const [showMap, setShowMap] = useState(true);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   // Number every stop once across the whole trip, so a marker's label matches
