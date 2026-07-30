@@ -41,10 +41,19 @@ from datetime import date, datetime, timedelta
 from typing import Any, Final, Protocol, runtime_checkable
 
 from app.core.config import Settings, get_settings
-from app.core.errors import ConfigurationError
+from app.core.errors import ConfigurationError, ExternalServiceError
 from app.core.logging import get_logger
+from app.services.geocoding import geocode_place
 
 logger = get_logger(__name__)
+
+#: Cost tier used for a city resolved through live geocoding rather than the
+#: curated dataset below. There is no real cost-of-living signal for an
+#: arbitrary place, and inventing one would look more precise than it is -
+#: the dataset's own tiers range 1-5, and 3 is its median, so this is a
+#: stated, honest "we don't know, assume typical" rather than a guess dressed
+#: up as data.
+_DEFAULT_COST_TIER: Final[int] = 3
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +270,63 @@ def resolve_city(name: str) -> tuple[str, str, float, float, int] | None:
     return key.title(), iata, latitude, longitude, tier
 
 
+async def resolve_city_async(
+    name: str, *, settings: Settings | None = None
+) -> tuple[str, str, float, float, int] | None:
+    """Resolve a city, falling back to live geocoding beyond the curated set.
+
+    `resolve_city` alone only knows ~70 major cities, so a real, well-known
+    destination that simply is not in that list - Bali, for instance, which
+    is not a city at all but a whole island - reported as fully unresolvable
+    for both weather AND accommodation in a live run, even though the
+    traveller's destination was perfectly valid. This tries the fast,
+    free-of-network-calls dataset lookup first, and only reaches for a live
+    geocode (the same Open-Meteo lookup `get_weather_forecast` already uses)
+    when that misses.
+
+    The IATA code returned for a geocoded fallback is a placeholder, not a
+    real airport code - this is a mock provider and every result it produces
+    already carries `SIMULATED_DISCLAIMER`, so a synthetic-looking code
+    alongside synthetic prices is consistent rather than newly misleading.
+
+    Args:
+        name: City, region or place name.
+        settings: Settings override, for tests.
+
+    Returns:
+        A tuple of (canonical name, a placeholder IATA-style code, latitude,
+        longitude, cost tier), or None if neither the dataset nor a live
+        geocode could resolve the name.
+    """
+    resolved = resolve_city(name)
+    if resolved is not None:
+        return resolved
+
+    try:
+        place = await geocode_place(name, settings=settings)
+    except ExternalServiceError:
+        # Geocoding itself being down must not be a harder failure than the
+        # dataset simply not having the city - both end the same way, with
+        # the caller reporting "could not resolve" rather than raising.
+        logger.warning("flights.geocode_fallback_failed", city=name, exc_info=True)
+        return None
+
+    if place is None or place.get("latitude") is None or place.get("longitude") is None:
+        return None
+
+    canonical = str(place.get("name") or name).strip()
+    # A 3-letter placeholder derived from the name, not a real airport code -
+    # see the docstring above for why that is fine here.
+    placeholder_iata = "".join(ch for ch in canonical.upper() if ch.isalpha())[:3].ljust(3, "X")
+    return (
+        canonical,
+        placeholder_iata,
+        float(place["latitude"]),
+        float(place["longitude"]),
+        _DEFAULT_COST_TIER,
+    )
+
+
 def _seasonality(departure: date, latitude: float) -> float:
     """Price multiplier reflecting seasonal demand.
 
@@ -387,8 +453,8 @@ class MockFlightProvider:
         Raises:
             ConfigurationError: Never; declared for interface symmetry.
         """
-        from_city = resolve_city(origin)
-        to_city = resolve_city(destination)
+        from_city = await resolve_city_async(origin)
+        to_city = await resolve_city_async(destination)
 
         if from_city is None or to_city is None:
             unknown = origin if from_city is None else destination
@@ -396,9 +462,10 @@ class MockFlightProvider:
                 "source": "mock",
                 "error": "unknown_city",
                 "message": (
-                    f"{unknown!r} is not in the mock provider's city dataset. "
-                    f"Supported cities include: {', '.join(sorted(_CITY_DATA)[:12])} "
-                    "and about 55 others."
+                    f"{unknown!r} could not be resolved to a place, even by a live "
+                    "geocode lookup. Ask the user to confirm the city name, or try "
+                    "a specific, well-known city near it rather than a region or "
+                    "island name."
                 ),
                 "offers": [],
             }
@@ -530,12 +597,17 @@ class MockFlightProvider:
         Returns:
             A dict with the resolved city and a list of properties.
         """
-        resolved = resolve_city(city)
+        resolved = await resolve_city_async(city)
         if resolved is None:
             return {
                 "source": "mock",
                 "error": "unknown_city",
-                "message": f"{city!r} is not in the mock provider's city dataset.",
+                "message": (
+                    f"{city!r} could not be resolved to a place, even by a live "
+                    "geocode lookup. If this is a country, region or island rather "
+                    "than a single city, retry with a specific city or town within "
+                    "it instead. Otherwise ask the user to confirm the name."
+                ),
                 "properties": [],
             }
 
@@ -653,6 +725,11 @@ class DuffelFlightProvider:
         """
         from app.services.http import request_json
 
+        # Deliberately the strict dataset lookup, not `resolve_city_async`.
+        # That fallback's IATA code is a synthetic placeholder, which is safe
+        # for the mock provider's own self-contained fake data but would be
+        # actively wrong here - a real API call needs a real airport code, and
+        # sending it a made-up one is worse than reporting the city unknown.
         from_city = resolve_city(origin)
         to_city = resolve_city(destination)
         if from_city is None or to_city is None:

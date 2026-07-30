@@ -64,6 +64,15 @@ RULES
   return_date argument. When both directions are needed, call it once with \
   return_date set - never call it twice, once per direction. That wastes a \
   call for no benefit and the tool already does both legs.
+- get_weather_forecast, find_places and search_accommodation all need a \
+  place that resolves to ONE point on a map. A whole region, country or \
+  island - "Bali", "Kerala", "Provence" - is not that: it silently resolves \
+  to whichever same-named village the geocoder happens to rank first \
+  anywhere in the world, which is not the place the traveller means. Use a \
+  specific city or town instead - one from your own research when you have \
+  one ("Uluwatu" or "Ubud", not "Bali"). If a tool reports the place could \
+  not be found, that is a strong sign the name you gave it was too broad; \
+  retry once with something more specific rather than the same name again.
 - Report what you actually found: specific names, places and figures. Your \
   output is the input to the next step, so a vague summary loses the work.
 

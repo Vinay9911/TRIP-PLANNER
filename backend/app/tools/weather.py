@@ -26,6 +26,7 @@ from typing import Any, Final
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ToolExecutionError
+from app.services.geocoding import geocode_place
 from app.services.http import request_json
 from app.tools.base import ToolResult, resilient_tool
 
@@ -72,51 +73,6 @@ WEATHER_UNAVAILABLE: Final[str] = (
     "unavailable so they should check conditions themselves before travelling. "
     "Do not call this tool again for the same location in this conversation."
 )
-
-
-async def geocode_place(place: str, *, settings: Settings | None = None) -> dict[str, Any] | None:
-    """Resolve a place name to coordinates and a timezone.
-
-    Args:
-        place: A city or place name, e.g. `"Kyoto"` or `"Kyoto, Japan"`.
-        settings: Settings override, for tests.
-
-    Returns:
-        A dict with `name`, `country`, `latitude`, `longitude` and `timezone`,
-        or None if the place could not be resolved.
-
-    Raises:
-        ExternalServiceError: If the geocoding service is unreachable.
-    """
-    cfg = settings or get_settings()
-
-    # Open-Meteo's geocoder matches on the bare city name; a "City, Country"
-    # string returns nothing. Splitting on the comma and searching for the
-    # first component is what makes the natural argument a model would supply
-    # actually work.
-    query = place.split(",")[0].strip()
-
-    payload = await request_json(
-        "GET",
-        f"{cfg.open_meteo_geocoding_url}/search",
-        service="open-meteo-geocoding",
-        params={"name": query, "count": 1, "language": "en", "format": "json"},
-    )
-
-    results = payload.get("results") or []
-    if not results:
-        return None
-
-    top = results[0]
-    return {
-        "name": top.get("name"),
-        "country": top.get("country"),
-        "region": top.get("admin1"),
-        "latitude": top.get("latitude"),
-        "longitude": top.get("longitude"),
-        "timezone": top.get("timezone"),
-        "population": top.get("population"),
-    }
 
 
 def _parse_date(value: str, field: str) -> date:
@@ -178,8 +134,11 @@ async def get_weather_forecast(
         return ToolResult.invalid(
             source="open-meteo",
             message=(
-                f"Could not find a place named {location!r}. Ask the user to confirm the "
-                "city, or try a better-known nearby city name."
+                f"Could not find a place named {location!r}. If this is a country, "
+                "region or island rather than a single city (e.g. 'Bali', 'Kerala'), "
+                "that is almost certainly why - retry once with a specific city or "
+                "town within it that you already know from your research. "
+                "Otherwise ask the user to confirm the city name."
             ),
         )
 

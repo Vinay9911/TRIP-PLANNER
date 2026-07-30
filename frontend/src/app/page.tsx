@@ -150,6 +150,7 @@ function Chat({
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryMessage, setRetryMessage] = useState<string | null>(null);
   const [focus, setFocus] = useState<FocusService[]>(SERVICES.map((s) => s.id));
   const [trip, setTrip] = useState<TripState>({});
   const [resetting, setResetting] = useState(false);
@@ -184,6 +185,7 @@ function Chat({
     setSessionId(undefined);
     setInput("");
     setError(null);
+    setRetryMessage(null);
     setTrip({});
     inputRef.current?.focus();
   }
@@ -214,6 +216,7 @@ function Chat({
     if (!trimmed || busy) return;
 
     setError(null);
+    setRetryMessage(null);
     setInput("");
     setTurns((previous) => [...previous, { role: "user", content: trimmed }]);
     setBusy(true);
@@ -234,7 +237,10 @@ function Chat({
           ? caught.message
           : "Could not reach the planner. Please try again.";
       setError(message);
-      // Put the message back so a failure does not lose what they typed.
+      // Kept separately from the input box (not just restored there) so a
+      // one-click Retry can resend it verbatim even if the user has since
+      // started typing something else into the box.
+      setRetryMessage(trimmed);
       setInput(trimmed);
       setTurns((previous) => previous.slice(0, -1));
     } finally {
@@ -276,7 +282,12 @@ function Chat({
         ))}
 
         {busy && <Thinking />}
-        {error && <ErrorBanner message={error} />}
+        {error && (
+          <ErrorBanner
+            message={error}
+            onRetry={retryMessage ? () => void send(retryMessage) : undefined}
+          />
+        )}
         <div ref={endRef} />
       </main>
 

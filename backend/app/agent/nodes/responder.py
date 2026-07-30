@@ -87,9 +87,13 @@ that they are illustrative and not bookable.
 
 When explaining a gap, speak like a person, not a system log. Never say \
 "language model provider", "API", "rate limit", "tool", or name an internal \
-step. "I couldn't check your saved preferences this time - just mention \
-anything that matters and I'll use it" is what a traveller needs to hear; \
-the mechanism behind why is not.
+step - and just as importantly, never wave at the reason with something \
+vague like "due to the limitations" or "for technical reasons" either. If \
+you cannot state the reason in plain words, drop the explanation and just \
+say what to do about it. "I couldn't check your saved preferences this \
+time - just mention anything that matters and I'll use it" is what a \
+traveller needs to hear; a vague nod at a cause you are not naming is not \
+more honest than naming none at all, it just sounds evasive.
 
 WRITE SOMETHING WORTH READING
 - A 2-day itinerary should be organised by day, then morning / afternoon / \
@@ -104,6 +108,22 @@ WRITE SOMETHING WORTH READING
   on section markers like flights ✈️, stays 🏨, weather 🌦, food 🍽 - and \
   almost never mid-sentence. An itinerary should scan like a well-labelled \
   map, not a greetings card.
+
+RESPECT GEOGRAPHY AND WHAT THEY SAID MATTERS MOST
+For a destination made of several distinct areas rather than one walkable \
+city - an island, a region, a country - do not sequence days as if distance \
+were free. Moving between areas takes real time; a 5-day trip visiting four \
+places that are each a multi-hour drive or a boat crossing apart is not a \
+relaxed itinerary, it is a transit schedule. Pick 2-3 areas that are \
+actually near each other and give each enough time to be worth the trip \
+there, rather than touring the whole map.
+
+If the traveller told you what matters most (their PRIORITIES, listed \
+below), every day should serve that. A day trip to a volcano does not \
+belong in an itinerary they asked to focus on coastlines, however well \
+regarded the volcano is - find another coastal option, or say plainly that \
+you are stepping outside their stated priority and why it is worth it \
+this once, rather than including it silently.
 
 RESPECT WHAT THEY SWITCHED OFF
 If the context lists services the traveller switched off, do not include \
@@ -171,6 +191,19 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
     if state.get("start_date"):
         context_lines.append(
             f"DATES: {state['start_date']} to {state.get('end_date') or state['start_date']}"
+        )
+
+    trip_state = state.get("trip_state") or {}
+    if trip_state.get("priorities"):
+        # Stated explicitly rather than left to survive inside `goal`'s prose
+        # - a live run showed the model naming this correctly in its opening
+        # line ("Given the focus on rugged coastlines...") and then including
+        # a day built around a volcano anyway. Knowing the priority and
+        # holding to it for every day are different things; this line is for
+        # the second one.
+        context_lines.append(
+            "PRIORITIES (what they said matters most - every day should serve "
+            "this, see RESPECT GEOGRAPHY above): " + ", ".join(map(str, trip_state["priorities"]))
         )
     if state.get("constraints"):
         context_lines.append(

@@ -143,13 +143,32 @@ export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   );
 }
 
-export function ErrorBanner({ message }: { message: string }) {
+export function ErrorBanner({
+  message,
+  onRetry,
+}: {
+  message: string;
+  /** When set, renders a "Retry" action next to the message - for failures
+   *  (a rate limit, a dropped connection) where resending the exact same
+   *  request is the obvious next step and forcing the user to retype it
+   *  themselves is friction with no benefit. */
+  onRetry?: () => void;
+}) {
   return (
     <div
       role="alert"
-      className="rounded-lg border border-[var(--color-danger)]/30 bg-red-50 px-4 py-3 text-sm text-[var(--color-danger)] dark:bg-red-950/30"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--color-danger)]/30 bg-red-50 px-4 py-3 text-sm text-[var(--color-danger)] dark:bg-red-950/30"
     >
-      {message}
+      <span>{message}</span>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="shrink-0 rounded-lg border border-[var(--color-danger)]/40 px-3 py-1 text-xs font-medium hover:bg-red-100 dark:hover:bg-red-950/50"
+        >
+          Retry
+        </button>
+      )}
     </div>
   );
 }

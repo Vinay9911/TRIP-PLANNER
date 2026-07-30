@@ -31,9 +31,9 @@ from typing import Any, Final
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ConfigurationError
+from app.services.geocoding import geocode_place
 from app.services.http import request_json
 from app.tools.base import ToolResult, resilient_tool
-from app.tools.weather import geocode_place
 
 PLACES_URL: Final[str] = "https://api.geoapify.com/v2/places"
 
