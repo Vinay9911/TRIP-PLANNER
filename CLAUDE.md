@@ -158,6 +158,18 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
   coordinates when they came from `find_places`, and a plan built from guide
   research and web search produces none - so the map was always empty. The
   responder geocodes the composed itinerary before returning it.
+- **Naming the city in a geocoder query is a hint, not a constraint.** Both
+  geocoders here would rather return a real coordinate for the wrong place
+  than admit a miss - the same failure as the Bali bullet above, one layer
+  down. "Jaigarh Fort, Jaipur" resolved to Maharashtra, 1,100 km away, and
+  rendered identically to the nine correct pins beside it. So the responder
+  resolves the destination once and hands `geocode_landmark` a `centre`,
+  which biases the search *and* rejects anything past `MAX_PIN_DISTANCE_KM`
+  (300 km - wide enough for any day trip, since the errors being caught are
+  an order of magnitude worse). Two traps: Geoapify's `bias` takes
+  `lon,lat`, the reverse of everywhere else in this codebase and silent when
+  swapped; and no centre must mean no filtering, because an empty map is a
+  worse outcome than an optimistic one.
 - **Cast arguments to Postgres functions explicitly** (`%s::uuid`, `%s::int`,
   `%s::real`). psycopg infers `smallint` from a small int and `double
   precision` from a float, neither of which matches the `integer`/`real`
@@ -217,7 +229,7 @@ Destination photos are seeded placeholders, labelled as illustrative.
 
 ## Status
 
-Backend and frontend complete, 166 tests passing. Verified end-to-end against
+Backend and frontend complete, 205 tests passing. Verified end-to-end against
 live Supabase, Groq, Gemini, Tavily, Geoapify and Wikivoyage: planning, dynamic
 tool selection, multi-hop RAG, memory extraction and cross-session recall,
 clarification, Japanese replies, and the admin trace all confirmed working.
@@ -226,6 +238,12 @@ The three-gear conversation is live-verified: "i want to go to kerala" ran an
 advisory turn (mode=advise, 2,780 tokens, four grounded options, two
 questions); the follow-up filling duration/window/origin ran the full
 pipeline (mode=plan) with a flight step from Delhi in the plan.
+
+Maps and photos are live-verified on a two-day Jaipur plan: 10 of 12 stops
+pinned with zero implausible coordinates, and 6 of 6 stops illustrated (four
+real Wikipedia photographs, two labelled representative). `GROQ_API_KEY` now
+holds 7 keys; probing them individually is the only way to see which still
+have daily budget, since the headers will not say.
 
 Live Supabase project: `nlwzlplylmgawangqdhm` (ap-southeast-1), 9 migrations
 applied, RLS verified (an authenticated user cannot escalate to admin and sees
