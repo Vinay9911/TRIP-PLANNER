@@ -110,6 +110,14 @@ class ChatResponse(BaseModel):
             "What a client renders as the trip panel."
         ),
     )
+    suggested_options: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Real destination/district names from the advisor's own retrieval "
+            "(populated only when mode is 'advise') - render as clickable chips "
+            "so the traveller can pick one instead of retyping it into the box."
+        ),
+    )
     needs_clarification: bool = Field(
         description="True when the reply is a question rather than an itinerary."
     )

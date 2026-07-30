@@ -36,6 +36,10 @@ The known slot keys:
 ``focus``            services switched on in the UI (see FOCUS_SERVICES)
 ``outline_confirmed``  the traveller accepted an outline or asked to plan
 ``advise_rounds``    how many advisory turns have already happened
+``pending_scoped_service``  a scoped ask ("flights") still missing a required
+                     slot, carried one turn so the follow-up that only
+                     supplies the slot ("from delhi") still completes it
+                     instead of falling through to the advise gear
 """
 
 from __future__ import annotations
@@ -55,6 +59,39 @@ FOCUS_SERVICES: tuple[str, ...] = ("flights", "stays", "attractions", "restauran
 #: a third consecutive round of questions is an interrogation, which is the
 #: exact behaviour the advise gear exists to avoid inflicting.
 MAX_ADVISE_ROUNDS = 2
+
+#: The one slot a scoped service cannot be satisfied without. Only flights is
+#: listed: a flight search with no departure city is meaningless (the tool
+#: has no default to fall back on), while stays/attractions/restaurants/
+#: weather all resolve fully from the destination alone. Found by watching a
+#: live run invent "if you're departing from New York" as a placeholder
+#: example when asked for flights with no origin known - a real question
+#: beats a fabricated example every time.
+REQUIRED_SLOT_FOR_SCOPED_SERVICE: dict[str, str] = {"flights": "origin"}
+
+#: Fallback questions used only if the model, despite the prompt instruction,
+#: leaves `clarifying_question` empty for a scoped request missing its
+#: required slot. Keeps `mode == "clarify"` a hard guarantee of a non-empty
+#: question rather than a promise the model might not keep.
+_SCOPED_FALLBACK_QUESTION: dict[str, str] = {
+    "flights": "Which city will you be flying from? ✈️",
+}
+
+
+def scoped_clarifying_question(service: str) -> str:
+    """A safe fallback question for a scoped service missing its required slot.
+
+    Args:
+        service: The scoped service, e.g. "flights".
+
+    Returns:
+        A short, friendly question. Falls back to a generic phrasing for a
+        service not in the table, which should not happen in practice since
+        only services with a required slot reach this function.
+    """
+    return _SCOPED_FALLBACK_QUESTION.get(
+        service, "Could you give me a bit more detail so I can look that up?"
+    )
 
 
 def normalise_focus(focus: list[str] | None) -> list[str]:
@@ -117,6 +154,31 @@ def merge_trip_state(existing: dict[str, Any], updates: dict[str, Any]) -> dict[
     return merged
 
 
+def resolve_scoped_service(this_turn_service: str | None, trip_state: dict[str, Any]) -> str:
+    """Carry a scoped ask across the follow-up turn that completes it.
+
+    "find me flights to london" -> "from delhi" is one request spread over
+    two turns: the first names the service, the second only supplies the
+    slot that was missing and does not repeat "flights". Without carrying
+    the service forward, the second turn sees `scoped_service == "none"`,
+    finds no duration or date signal either, and falls through to the
+    advise gear - asking vibe questions about a destination the traveller
+    only ever wanted a flight to.
+
+    Args:
+        this_turn_service: `scoped_service` extracted from THIS message, or
+            "none" when this message does not name a specific service.
+        trip_state: The merged trip state, which may carry a
+            `pending_scoped_service` left by an unfinished scoped request.
+
+    Returns:
+        The scoped service to route on for this turn.
+    """
+    if this_turn_service and this_turn_service != "none":
+        return this_turn_service
+    return str(trip_state.get("pending_scoped_service") or "none")
+
+
 def decide_mode(
     *,
     needs_clarification: bool,
@@ -130,18 +192,27 @@ def decide_mode(
     The rules, in the order they apply, each one sentence:
 
     1. No usable destination or a genuinely ambiguous request -> clarify.
-    2. A request for one specific service (flights, a stay, weather) -> plan,
+    2. A scoped request (flights, a stay, weather) missing the one slot it
+       cannot work without -> clarify, so the agent asks a real question
+       instead of running a plan with a blank argument or inventing a
+       placeholder example.
+    3. A request for one specific service that has what it needs -> plan,
        because the planner will produce a short scoped plan and asking vibe
        questions about a flight search would be absurd.
-    3. The traveller confirmed an outline or said "just plan it" -> plan,
+    4. The traveller confirmed an outline or said "just plan it" -> plan,
        and that confirmation sticks for the rest of the conversation so
        follow-up edits ("make day 2 lighter") refine rather than re-advise.
-    4. The trip is already specified (duration plus some date signal) -> plan;
+    5. The trip is already specified (duration plus some date signal) -> plan;
        asking questions whose answers are on the table is a form, not a
        conversation.
-    5. The advisory budget is spent -> plan with stated assumptions rather
+    6. The advisory budget is spent -> plan with stated assumptions rather
        than a third round of questions.
-    6. Otherwise -> advise.
+    7. Otherwise -> advise.
+
+    `scoped_service` should already be resolved through
+    `resolve_scoped_service` before being passed in here, so a follow-up
+    turn that only supplies the missing slot still lands on rule 2 or 3
+    rather than falling through to rule 7.
 
     Args:
         needs_clarification: The understanding step judged the request too
@@ -149,8 +220,8 @@ def decide_mode(
         destination: Destination resolved so far, if any.
         wants_full_plan: The traveller explicitly asked for the full plan or
             accepted a proposed outline this turn.
-        scoped_service: Set when the message asks for one specific service
-            rather than trip planning ("flights to tokyo in november").
+        scoped_service: The resolved scoped service for this turn (see
+            `resolve_scoped_service`), or "none".
         trip_state: The merged trip state for this conversation.
 
     Returns:
@@ -159,6 +230,9 @@ def decide_mode(
     if needs_clarification or not destination:
         return "clarify"
     if scoped_service and scoped_service != "none":
+        required_slot = REQUIRED_SLOT_FOR_SCOPED_SERVICE.get(scoped_service)
+        if required_slot and not trip_state.get(required_slot):
+            return "clarify"
         return "plan"
     if wants_full_plan or trip_state.get("outline_confirmed"):
         return "plan"

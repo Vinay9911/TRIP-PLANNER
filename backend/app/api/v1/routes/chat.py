@@ -136,6 +136,7 @@ async def chat(
         status=result.status,  # type: ignore[arg-type]
         mode=result.mode,  # type: ignore[arg-type]
         trip_state=result.trip_state,
+        suggested_options=result.suggested_options,
         needs_clarification=result.needs_clarification,
         detected_language=result.detected_language,
         destination=result.destination,

@@ -3,7 +3,7 @@
 /**
  * The chat page.
  *
- * Three deliberate choices worth noting.
+ * A few deliberate choices worth noting.
  *
  * Each reply can expand to show **what the agent actually did** - the plan it
  * wrote and every tool it called, with latencies. Most chat interfaces hide
@@ -15,10 +15,26 @@
  * switched-off service's tool is removed from the agent's toolbox on the
  * backend - the toggle is a guarantee, not a display preference.
  *
+ * The **quick actions** (both the big welcome cards and the slim strip above
+ * the composer) exist twice on purpose. A first-time user needs the big,
+ * explained version once; a returning user mid-conversation needs the
+ * shortcuts to still be reachable without scrolling back to the top - an
+ * earlier version only rendered them on the empty state, so they vanished
+ * the moment a conversation started, which is exactly the discoverability
+ * gap real usage surfaced.
+ *
  * The **trip bar** renders the `trip_state` ledger the backend returns: what
- * the agent has gathered so far (destination, days, when, from where). It
- * makes the slot-filling conversation legible - the user can see exactly what
- * the agent knows and what it is still missing.
+ * the agent has gathered so far. It makes the slot-filling conversation
+ * legible - the user can see exactly what the agent knows and what it is
+ * still missing, without reading the reply text closely enough to reverse
+ * engineer it.
+ *
+ * **Images are illustrative, not literal.** There is no image-search API in
+ * this project (no key to manage, no cost to justify), so destination chips
+ * use a seeded placeholder photo - deterministic per place name, so the same
+ * place always shows the same image, but not actually a photo of that place.
+ * That trade-off is stated plainly here because it would be misleading not
+ * to: the visual polish is real, the photographic accuracy is not.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -47,6 +63,12 @@ interface Turn {
   meta?: ChatResponse;
 }
 
+/** Deterministic placeholder photo for a place name. No API key, no cost -
+ *  see the module docstring for why this is a deliberate trade-off. */
+function placeImage(seed: string, width = 300, height = 200): string {
+  return `https://picsum.photos/seed/${encodeURIComponent(seed.toLowerCase())}/${width}/${height}`;
+}
+
 /**
  * The composer toggles. Order and ids mirror FOCUS_SERVICES on the backend;
  * the emoji double as the icons the agent's own replies use, so the sentence
@@ -60,9 +82,10 @@ const SERVICES: { id: FocusService; label: string }[] = [
 ];
 
 /**
- * What the agent can do, as clickable cards. Each fills the composer with a
- * scoped opener the user completes with a destination - discovery by doing,
- * instead of a features page nobody reads.
+ * What the agent can do, as clickable shortcuts. Each fills the composer
+ * with a scoped opener the user completes with a destination - discovery by
+ * doing, instead of a features page nobody reads. Rendered twice: large on
+ * the welcome screen, compact in the always-visible strip above the composer.
  */
 const CAPABILITIES: { icon: string; title: string; hint: string; prompt: string }[] = [
   {
@@ -110,6 +133,9 @@ const EXAMPLES = [
   "京都で2日間の旅程を立ててください",
 ];
 
+/** A few seeded photos purely for first-impression polish on the welcome screen. */
+const HERO_PLACES = ["Kyoto", "Kerala backwaters", "Santorini", "Marrakech"];
+
 export default function ChatPage() {
   return <AuthGate>{(session) => <Chat session={session} />}</AuthGate>;
 }
@@ -126,6 +152,7 @@ function Chat({
   const [error, setError] = useState<string | null>(null);
   const [focus, setFocus] = useState<FocusService[]>(SERVICES.map((s) => s.id));
   const [trip, setTrip] = useState<TripState>({});
+  const [resetting, setResetting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -147,9 +174,39 @@ function Chat({
     });
   }
 
-  function pickPrompt(prompt: string) {
-    setInput(prompt);
+  function insertPrompt(prompt: string) {
+    setInput((current) => (current ? `${current.trimEnd()} ${prompt}` : prompt));
     inputRef.current?.focus();
+  }
+
+  function startNewChat() {
+    setTurns([]);
+    setSessionId(undefined);
+    setInput("");
+    setError(null);
+    setTrip({});
+    inputRef.current?.focus();
+  }
+
+  async function resetEverything() {
+    if (
+      !window.confirm(
+        "This permanently erases everything remembered about you (preferences, past " +
+          "trips) and starts a brand new conversation. Your account stays. Continue?",
+      )
+    ) {
+      return;
+    }
+    setResetting(true);
+    setError(null);
+    try {
+      await api.eraseMyData();
+      startNewChat();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : "Could not erase your data.");
+    } finally {
+      setResetting(false);
+    }
   }
 
   async function send(message: string) {
@@ -186,24 +243,36 @@ function Chat({
   }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-4">
-      <header className="flex items-center justify-between border-b border-[var(--color-line)] py-4">
+    <div className="mx-auto flex min-h-screen max-w-4xl flex-col px-4 sm:px-6">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-line)] py-4">
         <span className="font-semibold tracking-tight">🌏 Trip Planner</span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Nav email={session.email} isAdmin={session.isAdmin} />
+          <Button variant="secondary" onClick={startNewChat} disabled={turns.length === 0}>
+            + New chat
+          </Button>
+          <button
+            type="button"
+            onClick={() => void resetEverything()}
+            disabled={resetting}
+            title="Erase everything remembered about you and start completely fresh"
+            className="rounded-lg px-3 py-2 text-sm text-[var(--color-ink-soft)] transition-colors hover:text-[var(--color-danger)] disabled:opacity-50"
+          >
+            {resetting ? "Resetting…" : "🗑️ Start fresh"}
+          </button>
           <Button variant="ghost" onClick={() => void signOut()}>
             Sign out
           </Button>
         </div>
       </header>
 
-      <main className="flex-1 space-y-4 py-6">
+      <main className="flex-1 space-y-5 py-6">
         {turns.length === 0 && (
-          <Welcome onPick={(text) => void send(text)} onPrompt={pickPrompt} />
+          <Welcome onPick={(text) => void send(text)} onPrompt={insertPrompt} />
         )}
 
         {turns.map((turn, index) => (
-          <Message key={index} turn={turn} />
+          <Message key={index} turn={turn} onPickOption={(text) => void send(text)} />
         ))}
 
         {busy && <Thinking />}
@@ -211,10 +280,12 @@ function Chat({
         <div ref={endRef} />
       </main>
 
-      <footer className="sticky bottom-0 bg-[var(--color-paper)] pb-6 pt-2">
+      <footer className="sticky bottom-0 space-y-2 bg-[var(--color-paper)] pb-6 pt-3">
         <TripBar trip={trip} />
 
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+        {turns.length > 0 && <QuickActionsStrip onPrompt={insertPrompt} />}
+
+        <div className="flex flex-wrap items-center gap-1.5">
           {SERVICES.map((service) => {
             const enabled = focus.includes(service.id);
             return (
@@ -243,6 +314,8 @@ function Chat({
           </span>
         </div>
 
+        <TripDetailsPicker onInsert={insertPrompt} />
+
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -263,7 +336,7 @@ function Chat({
             Send
           </Button>
         </form>
-        <p className="mt-2 text-center text-xs text-[var(--color-ink-soft)]">
+        <p className="text-center text-xs text-[var(--color-ink-soft)]">
           Flight and hotel prices are simulated. Everything else is real data.
         </p>
       </footer>
@@ -279,14 +352,37 @@ function Welcome({
   onPrompt: (prompt: string) => void;
 }) {
   return (
-    <div className="py-8">
-      <h2 className="text-xl font-semibold">Where to next? 🧳</h2>
+    <div className="py-6">
+      <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+        {HERO_PLACES.map((place) => (
+          <img
+            key={place}
+            src={placeImage(place, 200, 140)}
+            alt=""
+            aria-hidden
+            loading="lazy"
+            className="h-16 w-24 flex-1 rounded-xl object-cover sm:h-20 sm:w-32"
+          />
+        ))}
+      </div>
+
+      <h2 className="mt-5 text-xl font-semibold">Where to next? 🧳</h2>
       <p className="mt-1 text-sm text-[var(--color-ink-soft)]">
         Name a place and it will suggest, ask the right questions, then build
         the plan — or jump straight to one specific thing. Mention anything
         that matters (diet, budget, pace, who&apos;s coming) and it remembers
         for next time.
       </p>
+
+      <div className="mt-3 flex items-start gap-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
+        <span aria-hidden>💡</span>
+        <p>
+          <strong>What helps most:</strong> your destination, how many days,
+          roughly when, who&apos;s coming, and any must-haves (diet, budget,
+          pace). Give what you know — it will ask about anything important
+          that&apos;s missing.
+        </p>
+      </div>
 
       <div className="mt-5 grid gap-2 sm:grid-cols-3">
         {CAPABILITIES.map((capability) => (
@@ -327,6 +423,136 @@ function Welcome({
 }
 
 /**
+ * The always-visible, compact version of the capability shortcuts. Exists
+ * because the big welcome cards disappear the moment a conversation starts
+ * (by design - they are a first-impression, not a permanent fixture), which
+ * left no way to reach "find a stay" or "check weather" mid-conversation
+ * without scrolling up and re-reading. This strip is what stays.
+ */
+function QuickActionsStrip({ onPrompt }: { onPrompt: (prompt: string) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-ink-soft)]">
+        Quick actions
+      </span>
+      {CAPABILITIES.map((capability) => (
+        <button
+          key={capability.title}
+          type="button"
+          onClick={() => onPrompt(capability.prompt)}
+          title={capability.hint}
+          className="rounded-full border border-[var(--color-line)] bg-[var(--color-surface)] px-2.5 py-1 text-xs transition-colors hover:border-[var(--color-accent)]"
+        >
+          <span aria-hidden>{capability.icon}</span> {capability.title}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A clickable way to add dates and trip length without typing them out.
+ * Deliberately simple - native date inputs and a stepper, not a custom
+ * calendar widget - because the ask was "make it clickable", not "build a
+ * date-picker component library" for something used a handful of times per
+ * conversation.
+ */
+function TripDetailsPicker({ onInsert }: { onInsert: (text: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [days, setDays] = useState(0);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+
+  const canInsert = days > 0 || startDate;
+
+  function insert() {
+    const parts: string[] = [];
+    if (days > 0) parts.push(`${days} day${days === 1 ? "" : "s"}`);
+    if (startDate && endDate) parts.push(`from ${startDate} to ${endDate}`);
+    else if (startDate) parts.push(`starting ${startDate}`);
+    if (parts.length > 0) onInsert(parts.join(", "));
+    setOpen(false);
+    setDays(0);
+    setStartDate("");
+    setEndDate("");
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-1 text-xs text-[var(--color-accent)] underline underline-offset-2"
+      >
+        🗓️ Add dates or trip length
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-end gap-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] p-3 text-xs">
+      <div>
+        <label className="mb-1 block text-[var(--color-ink-soft)]">Days</label>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setDays((value) => Math.max(0, value - 1))}
+            className="h-7 w-7 rounded-lg border border-[var(--color-line)] font-medium"
+            aria-label="Fewer days"
+          >
+            −
+          </button>
+          <span className="w-6 text-center tabular-nums">{days}</span>
+          <button
+            type="button"
+            onClick={() => setDays((value) => Math.min(90, value + 1))}
+            className="h-7 w-7 rounded-lg border border-[var(--color-line)] font-medium"
+            aria-label="More days"
+          >
+            +
+          </button>
+        </div>
+      </div>
+      <div>
+        <label className="mb-1 block text-[var(--color-ink-soft)]" htmlFor="trip-start">
+          Start date
+        </label>
+        <input
+          id="trip-start"
+          type="date"
+          value={startDate}
+          onChange={(event) => setStartDate(event.target.value)}
+          className="rounded-lg border border-[var(--color-line)] bg-[var(--color-surface)] px-2 py-1.5"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-[var(--color-ink-soft)]" htmlFor="trip-end">
+          End date
+        </label>
+        <input
+          id="trip-end"
+          type="date"
+          value={endDate}
+          min={startDate || undefined}
+          onChange={(event) => setEndDate(event.target.value)}
+          className="rounded-lg border border-[var(--color-line)] bg-[var(--color-surface)] px-2 py-1.5"
+        />
+      </div>
+      <Button variant="secondary" onClick={insert} disabled={!canInsert}>
+        Add to message
+      </Button>
+      <button
+        type="button"
+        onClick={() => setOpen(false)}
+        className="text-[var(--color-ink-soft)] underline underline-offset-2"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+/**
  * The slot ledger, rendered. Empty slots simply do not appear, so the bar
  * grows as the conversation fills the trip in - a progress indicator that is
  * also an honesty check on what the agent claims to know.
@@ -348,7 +574,15 @@ function TripBar({ trip }: { trip: TripState }) {
   if (chips.length === 0) return null;
 
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
+    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      {trip.destination && (
+        <img
+          src={placeImage(trip.destination, 40, 40)}
+          alt=""
+          aria-hidden
+          className="h-6 w-6 rounded-full object-cover"
+        />
+      )}
       <span className="font-medium text-[var(--color-ink-soft)]">Your trip:</span>
       {chips.map((chip) => (
         <span
@@ -362,7 +596,13 @@ function TripBar({ trip }: { trip: TripState }) {
   );
 }
 
-function Message({ turn }: { turn: Turn }) {
+function Message({
+  turn,
+  onPickOption,
+}: {
+  turn: Turn;
+  onPickOption: (text: string) => void;
+}) {
   const [showTrace, setShowTrace] = useState(false);
 
   if (turn.role === "user") {
@@ -383,6 +623,10 @@ function Message({ turn }: { turn: Turn }) {
         <Card className="px-4 py-3">
           <FormattedText text={turn.content} />
         </Card>
+
+        {meta && meta.mode === "advise" && meta.suggested_options.length > 0 && (
+          <OptionChips options={meta.suggested_options} onPick={onPickOption} />
+        )}
 
         {meta && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
@@ -414,6 +658,42 @@ function Message({ turn }: { turn: Turn }) {
 
         {meta && showTrace && <Trace meta={meta} />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Clickable destination/district options from the advisor's own retrieval
+ * (real place names, not parsed out of the prose). Clicking one sends it
+ * straight back as the next message, so picking a suggestion is one tap
+ * instead of retyping a name back out of a paragraph.
+ */
+function OptionChips({
+  options,
+  onPick,
+}: {
+  options: string[];
+  onPick: (text: string) => void;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {options.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => onPick(`Let's do ${option}`)}
+          className="group flex items-center gap-2 overflow-hidden rounded-full border border-[var(--color-line)] bg-[var(--color-surface)] py-1 pl-1 pr-3 text-xs transition-colors hover:border-[var(--color-accent)]"
+        >
+          <img
+            src={placeImage(option, 32, 32)}
+            alt=""
+            aria-hidden
+            loading="lazy"
+            className="h-5 w-5 rounded-full object-cover"
+          />
+          {option}
+        </button>
+      ))}
     </div>
   );
 }

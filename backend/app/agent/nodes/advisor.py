@@ -109,7 +109,7 @@ async def advisor_node(
     destination = state.get("destination") or ""
     trip_state = dict(state.get("trip_state") or {})
 
-    guide_block = await _light_retrieval(retriever, state, destination)
+    guide_block, suggested_options = await _light_retrieval(retriever, state, destination)
 
     ask_about = missing_slots(trip_state)[:2]
     already_known = _already_known(state, trip_state)
@@ -193,15 +193,22 @@ async def advisor_node(
         final_response=answer,
         status="completed",
         trip_state=trip_state,
+        suggested_options=suggested_options,
         messages=[AIMessage(content=answer)],
     )
+
+
+#: Capped well below the 12 sent to the prompt (`_light_retrieval`'s internal
+#: slice) - a reply that offers 3-4 ways to experience a place should not
+#: turn into a wall of a dozen clickable chips underneath it.
+MAX_SUGGESTED_OPTIONS = 6
 
 
 async def _light_retrieval(
     retriever: MultiHopRetriever | None,
     state: AgentState,
     destination: str,
-) -> str:
+) -> tuple[str, list[str]]:
     """Run the one-hop orientation retrieval, degrading to nothing on failure.
 
     Args:
@@ -210,11 +217,12 @@ async def _light_retrieval(
         destination: Where to orient.
 
     Returns:
-        A prompt block of guide material plus the district list, or an empty
-        string when nothing could be retrieved.
+        A tuple of (prompt block of guide material plus the district list,
+        real district names for the frontend to render as clickable options).
+        Both empty when nothing could be retrieved.
     """
     if retriever is None or not destination:
-        return ""
+        return "", []
 
     try:
         result = await retriever.retrieve(
@@ -227,12 +235,12 @@ async def _light_retrieval(
     # never fail it - the fallback prompt branch handles the empty case.
     except Exception:
         logger.warning("agent.advise_retrieval_failed", destination=destination, exc_info=True)
-        return ""
+        return "", []
 
     record_rag_hops(len(result.hops))
 
     if result.is_empty and not result.districts_considered:
-        return ""
+        return "", []
 
     parts = []
     if result.districts_considered:
@@ -243,7 +251,7 @@ async def _light_retrieval(
     block = result.as_context_block(max_chars=3000)
     if block:
         parts.append(block)
-    return "\n\n".join(parts)
+    return "\n\n".join(parts), result.districts_considered[:MAX_SUGGESTED_OPTIONS]
 
 
 def _already_known(state: AgentState, trip_state: dict[str, object]) -> str:

@@ -60,6 +60,10 @@ RULES
 - If a tool reports itself unavailable, read its note and follow it. Do not \
   retry a tool that told you not to, and never invent data a tool failed to \
   return - say it is unavailable.
+- search_flights already supports a round trip in ONE call via its optional \
+  return_date argument. When both directions are needed, call it once with \
+  return_date set - never call it twice, once per direction. That wastes a \
+  call for no benefit and the tool already does both legs.
 - Report what you actually found: specific names, places and figures. Your \
   output is the input to the next step, so a vague summary loses the work.
 

@@ -122,6 +122,11 @@ class AgentState(TypedDict, total=False):
     #: Per-conversation slot ledger (origin, duration, priorities, ...).
     #: Loaded from `sessions.trip_state`, merged each turn, persisted back.
     trip_state: dict[str, Any]
+    #: The resolved scoped service for this turn ("flights", "stays", ...)
+    #: or "none". Read by the planner to keep a scoped ask ("find me
+    #: flights") from ballooning into a full itinerary with unrequested
+    #: logistics and day-by-day sections.
+    scoped_service: str
     #: Services the traveller has switched on in the UI. Controls which
     #: logistics tools the executor receives and what the prompts allow.
     focus: list[str]
@@ -151,6 +156,12 @@ class AgentState(TypedDict, total=False):
     # -- Output ------------------------------------------------------------
     final_response: str | None
     status: RunStatus
+    #: Grounded destination/district names from the advisor's one-hop
+    #: retrieval, e.g. ["Alappuzha", "Munnar", "Fort Kochi"] - real areas
+    #: from the guide corpus, not model-invented labels. Lets the frontend
+    #: render clickable options instead of the traveller having to retype a
+    #: name back out of the prose reply. Empty outside advise mode.
+    suggested_options: list[str]
     #: Set when a guardrail stopped the run early, so the responder can be
     #: honest about the answer being partial.
     stopped_because: str | None
@@ -195,6 +206,7 @@ def initial_state(
         goal="",
         mode="plan",
         trip_state=dict(trip_state or {}),
+        scoped_service="none",
         focus=normalise_focus(focus),
         destination=None,
         start_date=None,
@@ -212,6 +224,7 @@ def initial_state(
         replan_count=0,
         final_response=None,
         status="running",
+        suggested_options=[],
         stopped_because=None,
         rag_hops=0,
         prompt_tokens=0,

@@ -85,6 +85,12 @@ If the findings note that a data source was unavailable, say so briefly and \
 move on. If flight or hotel figures are marked as simulated, state plainly \
 that they are illustrative and not bookable.
 
+When explaining a gap, speak like a person, not a system log. Never say \
+"language model provider", "API", "rate limit", "tool", or name an internal \
+step. "I couldn't check your saved preferences this time - just mention \
+anything that matters and I'll use it" is what a traveller needs to hear; \
+the mechanism behind why is not.
+
 WRITE SOMETHING WORTH READING
 - A 2-day itinerary should be organised by day, then morning / afternoon / \
   evening.
@@ -154,6 +160,14 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
     context_lines = [f"TRAVELLER'S REQUEST: {state.get('goal', '')}"]
     if state.get("destination"):
         context_lines.append(f"DESTINATION: {state['destination']}")
+
+    scoped_service = state.get("scoped_service") or "none"
+    if scoped_service != "none":
+        context_lines.append(
+            f"SCOPED REQUEST: answer the {scoped_service} question only - no day-by-day "
+            "itinerary, no unrelated sections, no 'in the morning / afternoon / evening' "
+            "structure. A short, direct answer to what was actually asked."
+        )
     if state.get("start_date"):
         context_lines.append(
             f"DATES: {state['start_date']} to {state.get('end_date') or state['start_date']}"

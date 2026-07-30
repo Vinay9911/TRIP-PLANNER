@@ -64,6 +64,9 @@ export interface ChatResponse {
   status: RunStatus;
   mode: AgentMode;
   trip_state: TripState;
+  /** Real district/destination names from the advisor's own retrieval -
+   *  populated only in "advise" mode. Render as clickable chips. */
+  suggested_options: string[];
   needs_clarification: boolean;
   detected_language: string;
   destination: string | null;

@@ -23,6 +23,8 @@ from app.agent.trip_state import (
     merge_trip_state,
     missing_slots,
     normalise_focus,
+    resolve_scoped_service,
+    scoped_clarifying_question,
 )
 
 # ---------------------------------------------------------------------------
@@ -150,13 +152,46 @@ def test_confirmation_is_sticky_so_edits_refine_rather_than_readvise():
 
 
 def test_a_scoped_service_request_skips_the_vibe_conversation():
-    """'flights to tokyo in november' gets flights, not lifestyle questions."""
+    """'flights to tokyo in november, from delhi' gets flights, not lifestyle questions."""
     mode = decide_mode(
         needs_clarification=False,
         destination="Tokyo",
         wants_full_plan=False,
         scoped_service="flights",
-        trip_state={"destination": "Tokyo"},
+        trip_state={"destination": "Tokyo", "origin": "Delhi"},
+    )
+    assert mode == "plan"
+
+
+def test_a_flight_request_with_no_origin_asks_instead_of_guessing():
+    """The real bug: a flight search with no departure city must ask, not guess.
+
+    'find me flights to london' with no origin must not run a plan with a
+    blank departure city - that produced a fabricated 'if you're departing
+    from New York' example in a live run.
+    """
+    mode = decide_mode(
+        needs_clarification=False,
+        destination="London",
+        wants_full_plan=False,
+        scoped_service="flights",
+        trip_state={"destination": "London"},
+    )
+    assert mode == "clarify"
+
+
+def test_a_stay_request_needs_no_origin():
+    """A hotel search must not be blocked the way a flight search is.
+
+    Only flights require a departure city - a hotel search resolves fully
+    from the destination alone.
+    """
+    mode = decide_mode(
+        needs_clarification=False,
+        destination="Kochi",
+        wants_full_plan=False,
+        scoped_service="stays",
+        trip_state={"destination": "Kochi"},
     )
     assert mode == "plan"
 
@@ -232,6 +267,32 @@ def test_initial_state_carries_the_persisted_ledger():
     assert state["trip_state"]["duration_days"] == 5
     assert state["mode"] == "plan"
     assert state["focus"] == ["attractions"]
+
+
+# ---------------------------------------------------------------------------
+# Carrying a scoped ask across the turn that completes it
+# ---------------------------------------------------------------------------
+
+
+def test_a_bare_follow_up_carries_the_pending_service_forward():
+    """'from delhi' alone must still resolve to 'flights', not 'none'."""
+    resolved = resolve_scoped_service(
+        "none", {"destination": "London", "pending_scoped_service": "flights"}
+    )
+    assert resolved == "flights"
+
+
+def test_an_explicit_service_this_turn_always_wins():
+    resolved = resolve_scoped_service("stays", {"pending_scoped_service": "flights"})
+    assert resolved == "stays"
+
+
+def test_nothing_pending_resolves_to_none():
+    assert resolve_scoped_service("none", {}) == "none"
+
+
+def test_scoped_fallback_question_is_never_empty_for_flights():
+    assert scoped_clarifying_question("flights")
 
 
 # ---------------------------------------------------------------------------
@@ -359,3 +420,7 @@ async def test_advisor_grounds_its_options_in_the_retrieved_districts(monkeypatc
     assert "vegetarian" in captured["prompt"], "known constraints must be marked as known"
     assert "trip length (days): 5" in captured["prompt"]
     assert update["final_response"].startswith("🌴")
+    assert update["suggested_options"] == ["Alappuzha", "Munnar", "Kochi"], (
+        "the frontend needs real, retrieved district names to render as clickable "
+        "chips - not names parsed back out of the model's prose"
+    )

@@ -32,7 +32,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from app.agent.state import AgentState
-from app.agent.trip_state import decide_mode, merge_trip_state
+from app.agent.trip_state import (
+    decide_mode,
+    merge_trip_state,
+    resolve_scoped_service,
+    scoped_clarifying_question,
+)
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
@@ -185,6 +190,13 @@ Set wants_full_plan only for an explicit request or a clear acceptance of a \
 proposed outline. Set scoped_service when they want one specific thing \
 (flights, a hotel, restaurants, attractions, weather) rather than a trip.
 
+A flight search needs a departure city - it is meaningless without one. If \
+scoped_service is 'flights' and no origin is known (neither in this message \
+nor under KNOWN TRIP DETAILS below), set needs_clarification=true and ask \
+for their departure city specifically. Do NOT invent an illustrative example \
+city ("if you were departing from X...") - a traveller who never mentioned \
+that city finds it confusing, not helpful. Just ask.
+
 WHEN TO ASK A CLARIFYING QUESTION
 Ask only when planning would be impossible or wasted without an answer:
 - No destination is identifiable at all, and none was mentioned earlier in \
@@ -328,26 +340,68 @@ async def understand_node(
     # mostly backwaters" names no destination but continues the Kerala thread.
     effective_destination = understanding.destination or trip_state.get("destination")
 
+    # "find me flights to london" -> "from delhi" is one request spread over
+    # two turns. The second turn doesn't repeat "flights", so without this
+    # the scoped ask would be lost and the follow-up would fall through to
+    # the advise gear - asking vibe questions about a destination the
+    # traveller only ever wanted a flight to.
+    effective_scoped_service = resolve_scoped_service(understanding.scoped_service, trip_state)
+
     mode = decide_mode(
         needs_clarification=understanding.needs_clarification,
         destination=effective_destination,
         wants_full_plan=understanding.wants_full_plan,
-        scoped_service=understanding.scoped_service,
+        scoped_service=effective_scoped_service,
         trip_state=trip_state,
     )
 
+    # Carry the scoped ask forward only while it is still unresolved; once it
+    # is satisfied (or superseded by a genuine full-trip decision) the flag
+    # must not linger, or every later turn would keep re-scoping to it.
+    if mode == "clarify" and effective_scoped_service != "none":
+        trip_state["pending_scoped_service"] = effective_scoped_service
+    else:
+        trip_state.pop("pending_scoped_service", None)
+
     # Confirmation is sticky: once the traveller asks for the full plan, every
-    # later turn is a refinement, not a fresh round of advice.
-    if mode == "plan" and not understanding.needs_clarification:
+    # later turn is a refinement, not a fresh round of advice. Deliberately
+    # NOT set for a scoped decision (flights, a stay) - that is a one-off ask,
+    # not a decision to build a whole trip, and marking it confirmed would
+    # trap every later turn in full-plan mode regardless of what is asked.
+    # This was a real bug: "find me flights to london" -> "from delhi" used
+    # to turn a flights-only question into an unwanted full day-by-day
+    # itinerary with hotel suggestions, because the first turn's scoped
+    # decision got recorded as if the whole trip had been confirmed.
+    if (
+        mode == "plan"
+        and not understanding.needs_clarification
+        and effective_scoped_service == "none"
+    ):
         trip_state["outline_confirmed"] = True
+
+    # `mode` is the single source of truth for routing (see
+    # `route_after_understand`), so a "clarify" decision must leave here with
+    # a guaranteed question, even when the model itself did not flag one -
+    # the code-level scoped-slot rule above can decide "clarify" on its own.
+    needs_clarification = understanding.needs_clarification
+    clarifying_question = understanding.clarifying_question
+    if mode == "clarify" and not clarifying_question:
+        needs_clarification = True
+        clarifying_question = (
+            scoped_clarifying_question(effective_scoped_service)
+            if effective_scoped_service != "none"
+            else "Which city or country did you have in mind?"
+        )
+    elif mode == "clarify":
+        needs_clarification = True
 
     logger.info(
         "agent.understood",
         destination=effective_destination,
         mode=mode,
         language=understanding.detected_language,
-        needs_clarification=understanding.needs_clarification,
-        scoped_service=understanding.scoped_service,
+        needs_clarification=needs_clarification,
+        scoped_service=effective_scoped_service,
         constraints=len(merged_constraints),
         known_facts=len(known_facts),
     )
@@ -356,6 +410,7 @@ async def understand_node(
         goal=understanding.goal,
         mode=mode,
         trip_state=trip_state,
+        scoped_service=effective_scoped_service,
         destination=effective_destination,
         start_date=understanding.start_date or trip_state.get("start_date"),
         end_date=understanding.end_date or trip_state.get("end_date"),
@@ -363,13 +418,13 @@ async def understand_node(
         constraints=merged_constraints,
         memory_block=memory_block,
         memory_ids=memory_ids,
-        needs_clarification=understanding.needs_clarification,
-        clarifying_question=understanding.clarifying_question,
+        needs_clarification=needs_clarification,
+        clarifying_question=clarifying_question,
     )
 
-    if understanding.needs_clarification and understanding.clarifying_question:
+    if mode == "clarify":
         update["status"] = "clarifying"
-        update["final_response"] = understanding.clarifying_question
+        update["final_response"] = clarifying_question
 
     return update
 

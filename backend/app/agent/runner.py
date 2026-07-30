@@ -75,6 +75,7 @@ class TurnResult:
     status: str
     mode: str = "plan"
     trip_state: dict[str, Any] = None  # type: ignore[assignment]
+    suggested_options: list[str] = None  # type: ignore[assignment]
     detected_language: str = "en"
     destination: str | None = None
     needs_clarification: bool = False
@@ -100,6 +101,8 @@ class TurnResult:
             self.token_breakdown = []
         if self.trip_state is None:
             self.trip_state = {}
+        if self.suggested_options is None:
+            self.suggested_options = []
 
 
 class AgentRunner:
@@ -266,6 +269,7 @@ class AgentRunner:
             status=final_state.get("status", "completed"),
             mode=final_state.get("mode", "plan"),
             trip_state=dict(final_state.get("trip_state") or {}),
+            suggested_options=list(final_state.get("suggested_options") or []),
             detected_language=final_state.get("detected_language", "en"),
             destination=final_state.get("destination"),
             needs_clarification=bool(final_state.get("needs_clarification")),

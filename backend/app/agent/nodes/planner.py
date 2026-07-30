@@ -79,6 +79,11 @@ WHAT NOT TO DO
   discovering them - the executor simply uses them.
 - Do not plan speculative work. A 2-day itinerary does not need a step for \
   'research day trips in case they want one'.
+- If this is a SCOPED REQUEST (see below), that overrides everything else in \
+  this prompt: plan ONLY what answers that one thing. Someone who asked for \
+  flights did not ask for a hotel, an itinerary, or a day-by-day plan, and \
+  getting one anyway when they asked a narrow question is not a better \
+  answer - it is answering a question they did not ask.
 
 A short plan that answers the question beats a thorough plan that exhausts \
 the request budget before finishing.\
@@ -105,17 +110,35 @@ async def planner_node(state: AgentState, *, settings: Settings | None = None) -
             f"DATES: {state['start_date']} to {state.get('end_date') or state['start_date']}"
         )
 
+    scoped_service = state.get("scoped_service") or "none"
+    if scoped_service != "none":
+        # A scoped ask ("find me flights to london") must not balloon into a
+        # full itinerary just because origin/duration happen to be known - a
+        # live run did exactly that, turning a flights-only question into a
+        # two-day plan with hotel suggestions once a departure city was
+        # given. This instruction overrides the generic origin/duration
+        # guidance below, which is why it is stated first and loudly.
+        context_lines.append(
+            f"SCOPED REQUEST: the traveller specifically asked about {scoped_service} "
+            "only. Plan 1-2 steps that answer exactly that - no day-by-day "
+            "itinerary, no unrelated logistics, no extra research."
+        )
+
     trip_state = state.get("trip_state") or {}
     if trip_state.get("origin"):
         # Origin is what makes a logistics step plannable at all. Stated
         # explicitly so a full trip plan includes flights when they are
         # wanted, instead of the tools sitting unused because no step ever
-        # had a departure city to work with.
-        context_lines.append(
-            f"TRAVELLING FROM: {trip_state['origin']} - include a logistics step "
-            "(flights, and a place to stay) when planning a full trip, unless "
-            "those services are switched off below."
-        )
+        # had a departure city to work with. Suppressed for a scoped request,
+        # where the SCOPED REQUEST line above already says what to plan.
+        if scoped_service == "none":
+            context_lines.append(
+                f"TRAVELLING FROM: {trip_state['origin']} - include a logistics step "
+                "(flights, and a place to stay) when planning a full trip, unless "
+                "those services are switched off below."
+            )
+        else:
+            context_lines.append(f"TRAVELLING FROM: {trip_state['origin']}")
     if trip_state.get("duration_days"):
         context_lines.append(f"TRIP LENGTH: {trip_state['duration_days']} days")
     if not state.get("start_date") and trip_state.get("travel_window"):
