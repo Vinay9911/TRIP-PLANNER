@@ -75,6 +75,10 @@ export interface ChatResponse {
   steps_executed: number;
   replan_count: number;
   latency_ms: number;
+  /** Tokens this turn consumed. Exposed because on a free tier the
+   *  per-minute token allowance - not the request count - is what limits
+   *  throughput, and you cannot budget for what you cannot see. */
+  total_tokens: number;
 }
 
 export interface SessionSummary {

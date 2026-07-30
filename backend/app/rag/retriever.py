@@ -43,6 +43,7 @@ taking this docstring's word for it.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Final
 
@@ -368,19 +369,54 @@ class MultiHopRetriever:
             result.stopped_because = "no_districts_selected"
             return
 
-        result.districts_selected = selected
-        indexed: list[str] = []
+        # Fetched concurrently rather than in a sequential loop: each fetch is
+        # a network round trip and they do not depend on each other, so three
+        # districts cost one round trip instead of three. Measured at ~0.8s
+        # per fetch, which was a third of this hop's wall time.
+        articles = await asyncio.gather(
+            *(self.client.fetch_article(title) for title in selected),
+            return_exceptions=True,
+        )
 
-        for title in selected:
-            article = await self.client.fetch_article(title)
-            if article is None:
+        # **Index under, and later search by, the article's OWN title.**
+        #
+        # Wikivoyage redirects heavily: `Mumbai/Colaba and Fort` resolves to
+        # `Mumbai/South`, and three different requested titles can collapse
+        # onto one real article. The previous version indexed the fetched
+        # article (under `article.title`) but recorded the *requested* title,
+        # then searched for that - so the search filtered on a title that had
+        # never been indexed and returned nothing. Hops 2, 3 and 4 all
+        # silently produced zero chunks for any destination with redirects,
+        # which quietly degraded the whole multi-hop retrieval to a single
+        # hop while still paying for every hop's embedding call.
+        # Deduplicated before indexing, since several requested titles can
+        # redirect onto the same article and indexing it twice is wasted work.
+        resolved = []
+        indexed: list[str] = []
+        for article in articles:
+            if isinstance(article, BaseException) or article is None:
                 continue
-            await ensure_indexed(article, self.index, self.embeddings, settings=self.settings)
-            indexed.append(title)
+            if article.title not in indexed:
+                indexed.append(article.title)
+                resolved.append(article)
+
+        # Indexed concurrently: each call is an embedding round trip, and
+        # Gemini serves three in parallel in about the time it serves one.
+        await asyncio.gather(
+            *(
+                ensure_indexed(article, self.index, self.embeddings, settings=self.settings)
+                for article in resolved
+            ),
+            return_exceptions=True,
+        )
 
         if not indexed:
             result.stopped_because = "district_articles_unavailable"
             return
+
+        # Canonical titles, so hops 3 and 4 - which filter on
+        # `districts_selected` - search documents that actually exist.
+        result.districts_selected = indexed
 
         sections = SECTIONS_FOR_INTENT.get(intent, SECTIONS_FOR_INTENT["general"])
         hop_query = f"{query} in {', '.join(d.split('/')[-1] for d in indexed)}"
@@ -491,20 +527,32 @@ class MultiHopRetriever:
             return
 
         before = len(collected)
-        queries: list[str] = []
 
         # One search per constraint rather than one combined search: embedding
         # "vegetarian AND wheelchair accessible" produces a vector near
         # neither, which is the classic multi-constraint retrieval failure.
-        for constraint in constraints[:3]:
-            hop_query = f"{constraint} options and suitability"
-            queries.append(hop_query)
-            chunks = await self._search(
-                hop_query,
-                document_titles=result.districts_selected,
-                sections=["Eat", "Drink", "See", "Do", "Sleep"],
-                top_k=3,
-            )
+        #
+        # Run concurrently, though - they are independent, and measured
+        # against the live API three parallel embedding calls complete in
+        # roughly the time one takes, so doing them in sequence was costing
+        # seconds per run for nothing.
+        queries = [f"{constraint} options and suitability" for constraint in constraints[:3]]
+        searches = await asyncio.gather(
+            *(
+                self._search(
+                    hop_query,
+                    document_titles=result.districts_selected,
+                    sections=["Eat", "Drink", "See", "Do", "Sleep"],
+                    top_k=3,
+                )
+                for hop_query in queries
+            ),
+            return_exceptions=True,
+        )
+        for chunks in searches:
+            if isinstance(chunks, BaseException):
+                logger.warning("rag.constraint_search_failed", exc_info=chunks)
+                continue
             self._collect(chunks, collected)
 
         result.hops.append(

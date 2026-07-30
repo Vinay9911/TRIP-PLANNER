@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { IconCompass } from "@/components/icons";
 import { Button, Card, ErrorBanner } from "@/components/ui";
 import {
   signInWithGoogle,
@@ -51,14 +52,19 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center px-4 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Trip Planner</h1>
+          <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-[var(--color-brand)] text-white">
+            <IconCompass size="1.5em" />
+          </span>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">
+            Trip Planner
+          </h1>
           <p className="mt-2 text-sm text-[var(--color-ink-soft)]">
             An AI travel planner that remembers what matters to you.
           </p>
         </div>
 
         <Card className="p-6">
-          <div className="mb-5 flex gap-1 rounded-lg bg-[var(--color-line)]/40 p-1">
+          <div className="mb-5 flex gap-1 rounded-lg bg-[var(--color-surface-2)] p-1">
             {(["signin", "signup"] as const).map((option) => (
               <button
                 key={option}
@@ -84,7 +90,7 @@ export default function LoginPage() {
             </div>
           )}
           {notice && (
-            <p className="mb-4 rounded-lg bg-[var(--color-accent-soft)] px-4 py-3 text-sm text-[var(--color-accent)]">
+            <p className="mb-4 rounded-lg bg-[var(--color-accent-soft)] px-4 py-3 text-sm text-[var(--color-brand-strong)]">
               {notice}
             </p>
           )}
@@ -100,7 +106,7 @@ export default function LoginPage() {
                 autoComplete="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                className="w-full rounded-lg border border-[var(--color-line)] bg-transparent px-3 py-2 text-sm"
+                className="min-h-11 w-full rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-2 text-sm"
               />
             </label>
 
@@ -115,7 +121,7 @@ export default function LoginPage() {
                 autoComplete={mode === "signup" ? "new-password" : "current-password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                className="w-full rounded-lg border border-[var(--color-line)] bg-transparent px-3 py-2 text-sm"
+                className="min-h-11 w-full rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-2 text-sm"
               />
             </label>
 

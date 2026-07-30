@@ -204,6 +204,24 @@ async def advisor_node(
 MAX_SUGGESTED_OPTIONS = 6
 
 
+def _display_name(title: str) -> str:
+    """Turn a Wikivoyage article title into something readable.
+
+    Titles for sub-areas are paths - `Mumbai/Colaba and Fort`,
+    `Kyoto/Higashiyama` - and passing them through verbatim leaked into a real
+    reply as "explore the colonial buildings in Mumbai/Colaba and Fort". The
+    slash is an artefact of how the corpus is organised, not part of the
+    place's name, and it makes the agent look like it is reciting a database.
+
+    Args:
+        title: A Wikivoyage article title.
+
+    Returns:
+        The last path segment, which is the human-facing area name.
+    """
+    return title.split("/")[-1].strip() or title
+
+
 async def _light_retrieval(
     retriever: MultiHopRetriever | None,
     state: AgentState,
@@ -242,16 +260,25 @@ async def _light_retrieval(
     if result.is_empty and not result.districts_considered:
         return "", []
 
+    # Deduplicated after prettifying, since "Mumbai/South" and "South" would
+    # otherwise both survive as separate-looking options.
+    display_names: list[str] = []
+    for title in result.districts_considered:
+        pretty = _display_name(title)
+        if pretty not in display_names:
+            display_names.append(pretty)
+
     parts = []
-    if result.districts_considered:
+    if display_names:
         parts.append(
-            "AREAS THE GUIDE LISTS FOR THIS DESTINATION: "
-            + ", ".join(result.districts_considered[:12])
+            "AREAS THE GUIDE LISTS FOR THIS DESTINATION (use these names exactly "
+            "as written here - never with a slash or a city prefix): "
+            + ", ".join(display_names[:12])
         )
     block = result.as_context_block(max_chars=3000)
     if block:
         parts.append(block)
-    return "\n\n".join(parts), result.districts_considered[:MAX_SUGGESTED_OPTIONS]
+    return "\n\n".join(parts), display_names[:MAX_SUGGESTED_OPTIONS]
 
 
 def _already_known(state: AgentState, trip_state: dict[str, object]) -> str:

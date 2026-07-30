@@ -17,7 +17,8 @@ import Link from "next/link";
 import { use, useEffect, useState } from "react";
 
 import { AuthGate } from "@/components/AuthGate";
-import { Badge, Card, ErrorBanner, Nav, PageHeader } from "@/components/ui";
+import { AppShell } from "@/components/AppShell";
+import { Badge, Card, ErrorBanner, PageHeader } from "@/components/ui";
 import { ApiError, api, type RunTrace } from "@/lib/api";
 
 export default function RunTracePage({
@@ -51,13 +52,14 @@ function Trace({
   }, [runId]);
 
   return (
-    <div className="mx-auto min-h-screen max-w-4xl px-4 py-6">
-      <div className="mb-6 flex items-center justify-between">
-        <Link href="/admin" className="text-sm text-[var(--color-accent)]">
-          ← Admin
-        </Link>
-        <Nav email={session.email} isAdmin={session.isAdmin} />
-      </div>
+    <AppShell session={session}>
+    <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6">
+      <Link
+        href="/admin"
+        className="mb-4 inline-flex min-h-9 items-center text-sm font-medium text-[var(--color-brand-strong)]"
+      >
+        ← Admin
+      </Link>
 
       <PageHeader
         title="Execution trace"
@@ -194,5 +196,6 @@ function Trace({
         </div>
       )}
     </div>
+    </AppShell>
   );
 }

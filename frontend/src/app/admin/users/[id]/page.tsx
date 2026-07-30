@@ -18,13 +18,13 @@
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
 
+import { AppShell } from "@/components/AppShell";
 import { AuthGate } from "@/components/AuthGate";
 import {
   Badge,
   Card,
   EmptyState,
   ErrorBanner,
-  Nav,
   PageHeader,
 } from "@/components/ui";
 import {
@@ -92,13 +92,14 @@ function UserDetail({
   const retired = detail?.memories.filter((memory) => memory.status !== "active") ?? [];
 
   return (
-    <div className="mx-auto min-h-screen max-w-4xl px-4 py-6">
-      <div className="mb-6 flex items-center justify-between">
-        <Link href="/admin" className="text-sm text-[var(--color-accent)]">
-          ← Admin
-        </Link>
-        <Nav email={session.email} isAdmin={session.isAdmin} />
-      </div>
+    <AppShell session={session}>
+    <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6">
+      <Link
+        href="/admin"
+        className="mb-4 inline-flex min-h-9 items-center text-sm font-medium text-[var(--color-brand-strong)]"
+      >
+        ← Admin
+      </Link>
 
       {error && <ErrorBanner message={error} />}
       {!detail && !error && (
@@ -194,7 +195,7 @@ function UserDetail({
                             <Badge>{conversation.destination}</Badge>
                           )}
                           {conversation.message_count} messages
-                          <span className="text-[var(--color-accent)]">
+                          <span className="font-medium text-[var(--color-brand-strong)]">
                             {openSession === conversation.id ? "hide" : "read"}
                           </span>
                         </span>
@@ -221,5 +222,6 @@ function UserDetail({
         </>
       )}
     </div>
+    </AppShell>
   );
 }

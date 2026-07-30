@@ -186,6 +186,15 @@ not guess a slot the traveller has not given you. Slots already listed under \
 KNOWN TRIP DETAILS are settled; leave them null here unless this message \
 changes them.
 
+NARROWING THE DESTINATION IS A CHANGE, NOT A REPETITION
+When the known destination is a country or region and this message names a \
+city, area or district inside it, set `destination` to that narrower place. \
+"Let's do Mumbai" after discussing India means the destination is now Mumbai; \
+leaving it as India would plan the wrong trip. The same applies to picking one \
+of several options you offered ("Rugged Coastlines", "the backwaters") - if it \
+identifies a specific place, extract it. Only leave `destination` null when \
+this message genuinely does not indicate where they are going.
+
 Set wants_full_plan only for an explicit request or a clear acceptance of a \
 proposed outline. Set scoped_service when they want one specific thing \
 (flights, a hotel, restaurants, attractions, weather) rather than a trip.

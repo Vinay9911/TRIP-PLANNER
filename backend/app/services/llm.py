@@ -44,6 +44,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Any, TypeVar
 
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel
@@ -116,6 +117,58 @@ def _build_model(
         max_retries=0,
         api_key=api_key,  # type: ignore[arg-type]
     )
+
+
+class _UsageRecordingCallback(BaseCallbackHandler):
+    """Records token usage for calls this module does not itself make.
+
+    `call_model` and `structured_call` read usage off the response they get
+    back. The executor node cannot: it hands a model object to
+    `create_agent`, which owns its own ReAct loop and calls the model
+    directly, several times per step, resending the accumulated message
+    history and tool results each iteration.
+
+    Without this handler, none of that was metered. The consequence was not
+    just an inaccurate number - it actively misled diagnosis. Runs recorded
+    ~7,400 tokens and still failed with rate limits against four healthy keys
+    each allowing 12,000 tokens/minute, which made the ceiling look like a
+    key-count problem when in fact the executor's unmetered loop was the bulk
+    of real consumption, concentrated on the single key its model instance
+    holds for its lifetime.
+
+    Attributed to `"execute"` rather than a per-call label: the point is to
+    make the executor's share of the budget visible, and the individual
+    iterations inside one step are not separately meaningful.
+    """
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        """Record usage from a completed model call.
+
+        Args:
+            response: LangChain `LLMResult`. Its shape varies by provider and
+                version, so usage is read defensively from the two places it
+                is known to appear.
+            **kwargs: Ignored callback metadata.
+        """
+        prompt_tokens, completion_tokens = 0, 0
+
+        # Preferred: usage_metadata on the message itself.
+        for generations in getattr(response, "generations", None) or []:
+            for generation in generations or []:
+                message = getattr(generation, "message", None)
+                usage = getattr(message, "usage_metadata", None) or {}
+                prompt_tokens += int(usage.get("input_tokens") or 0)
+                completion_tokens += int(usage.get("output_tokens") or 0)
+
+        # Fallback: the provider's aggregate block.
+        if not prompt_tokens and not completion_tokens:
+            llm_output = getattr(response, "llm_output", None) or {}
+            usage = llm_output.get("token_usage") or {}
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+
+        if prompt_tokens or completion_tokens:
+            record_usage("execute", prompt_tokens, completion_tokens)
 
 
 def get_llm_pool(settings: Settings | None = None) -> KeyPool:
@@ -193,13 +246,19 @@ def get_model(
     cfg = settings or get_settings()
     model_name, resolved_temperature = _resolve_role(role, cfg, temperature)
 
-    return _build_model(
+    model = _build_model(
         role=role,
         model_name=model_name,
         temperature=resolved_temperature,
         timeout=cfg.llm_timeout_seconds,
         api_key=get_llm_pool(cfg).acquire(),
     )
+
+    # Attached per-call rather than baked into `_build_model`, whose result is
+    # cached and shared: mutating the cached client's callback list would
+    # accumulate handlers on every call. `with_config` returns a configured
+    # view and leaves the cached client untouched.
+    return model.with_config(callbacks=[_UsageRecordingCallback()])  # type: ignore[return-value]
 
 
 def _classify_provider_error(exc: Exception) -> Exception:

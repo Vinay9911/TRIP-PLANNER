@@ -113,6 +113,21 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
   `ProactorEventLoop` on Windows via a loop factory, and psycopg's async mode
   cannot use it - every DB call fails and the app silently falls back to
   in-memory stores. `run.py` pins `SelectorEventLoop`. Linux/Docker unaffected.
+- **Wikivoyage redirects break title-keyed retrieval.** `list_districts`
+  offers titles that redirect: `Mumbai/Colaba and Fort` → `Mumbai/South`, and
+  several offered titles can collapse onto one article. Always index *and*
+  search by `article.title` after fetching, never by the requested title —
+  getting this wrong made hops 2–4 return zero chunks and silently reduced
+  multi-hop RAG to a single hop. Regression tests in `test_rag_redirects.py`.
+- **`create_agent` bypasses `call_model`, so it bypasses metering.** The
+  executor hands a model object to LangChain's ReAct loop, which calls it
+  directly. Usage is captured with a callback attached in `get_model`; without
+  it, the largest token consumer in the system is invisible and rate limits
+  look inexplicable. It also holds one key for its lifetime, so its burst
+  lands on a single key's 12,000 TPM rather than spreading.
+- **Open-Meteo's geocoder ranks by relevance, not size.** `count=1` for
+  "Bali" returns a village in West Bengal ahead of the Indonesian island.
+  `services/geocoding.py` asks for 10 and picks the most populous.
 - **Cast arguments to Postgres functions explicitly** (`%s::uuid`, `%s::int`,
   `%s::real`). psycopg infers `smallint` from a small int and `double
   precision` from a float, neither of which matches the `integer`/`real`
@@ -135,12 +150,38 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
 - Commit messages: explain the reasoning, plain prose, no bullet-point
   changelogs, no AI-tell phrasing.
 
+## Frontend
+
+```
+frontend/src/
+  app/        page (chat), dashboard, memories, admin/*, login, layout
+  components/ AppShell (sidebar + history), ui, charts, icons, AuthGate
+  lib/        api (typed client), supabase
+```
+
+**One shell, every page.** `AppShell` renders the sidebar — new chat, nav,
+conversation history, account actions — and every page supplies only its own
+content. Per-page headers were why the layout appeared to jump between tabs.
+
+**A conversation is a URL** (`/?session=<id>`), so history entries are
+reopenable and linkable. The sessions API always worked; nothing had ever
+called it.
+
+Design tokens live in `globals.css`. Two coral values on purpose:
+`--color-brand` is the vivid tone for gradients and large type,
+`--color-brand-strong` is the darker one that clears 4.5:1 with white for
+buttons and small text. Icons are inline SVG (`components/icons.tsx`) — emoji
+appear only inside the agent's own message text, never as interface chrome.
+Charts are hand-rolled SVG with table fallbacks; no charting dependency.
+Destination photos are seeded placeholders, labelled as illustrative.
+
 ## Documentation map
 
 - `README.md` — setup, running, example requests, live URL
 - `docs/ARCHITECTURE.md` — the technical document: design and rationale
 - `docs/WORKFLOW.md` — plain-language request walkthrough for non-engineers
 - `docs/TESTING.md` — runbook: how to start everything and verify each claim
+- `docs/AUDIT.md` — 30 Jul 2026 diagnostic pass: what was broken and why
 - `scripts/` — verify_setup.py, apply_migrations.py, smoke_test.py
 - Module docstrings carry the detailed reasoning; keep them current.
 
