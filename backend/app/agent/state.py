@@ -162,6 +162,16 @@ class AgentState(TypedDict, total=False):
     #: render clickable options instead of the traveller having to retype a
     #: name back out of the prose reply. Empty outside advise mode.
     suggested_options: list[str]
+    #: The plan as structured days (see `agent/itinerary.py`), serialised.
+    #: Present only for full-trip plans; scoped asks and advisory turns have
+    #: nothing to lay out. The interface renders cards, photos and map pins
+    #: from this, and falls back to `final_response` when it is absent.
+    itinerary: dict[str, Any] | None
+    #: Follow-up offers derived in code from what is known and what has not
+    #: been done yet, e.g. "check flights from Delhi". Deterministic rather
+    #: than model-generated, so the agent cannot offer a service the
+    #: traveller switched off or one it has already delivered.
+    suggested_actions: list[dict[str, str]]
     #: Set when a guardrail stopped the run early, so the responder can be
     #: honest about the answer being partial.
     stopped_because: str | None
@@ -225,6 +235,8 @@ def initial_state(
         final_response=None,
         status="running",
         suggested_options=[],
+        itinerary=None,
+        suggested_actions=[],
         stopped_because=None,
         rag_hops=0,
         prompt_tokens=0,

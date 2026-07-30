@@ -50,6 +50,68 @@ export interface PlanStep {
   kind: string;
 }
 
+/** What sort of thing an itinerary item is. Mirrors ItemKind on the backend. */
+export type ItemKind =
+  | "sight"
+  | "food"
+  | "activity"
+  | "transport"
+  | "stay"
+  | "neighbourhood"
+  | "note";
+
+export interface ItineraryItem {
+  name: string;
+  kind: ItemKind;
+  district: string | null;
+  description: string;
+  latitude: number | null;
+  longitude: number | null;
+  approx_duration: string | null;
+  booking_note: string | null;
+}
+
+export interface ItineraryDay {
+  day_number: number;
+  title: string;
+  date: string | null;
+  summary: string;
+  morning: ItineraryItem[];
+  afternoon: ItineraryItem[];
+  evening: ItineraryItem[];
+  all_day: ItineraryItem[];
+}
+
+/** A full plan as structured days. Absent for scoped asks and advisory turns. */
+export interface Itinerary {
+  destination: string;
+  intro: string;
+  days: ItineraryDay[];
+  practical_notes: string[];
+  gaps: string[];
+}
+
+/** A follow-up offer: the chip label, and the message tapping it sends. */
+export interface SuggestedAction {
+  label: string;
+  message: string;
+}
+
+/**
+ * A photograph for a place.
+ *
+ * `is_representative` is the one that matters: when true this is not a photo
+ * of that specific place, only of something similar, and the interface has to
+ * say so rather than implying otherwise.
+ */
+export interface PlaceImageResult {
+  url: string;
+  tier: "wikivoyage" | "wikipedia" | "commons_geo" | "loremflickr";
+  is_representative: boolean;
+  credit: string | null;
+  source_page: string | null;
+}
+
 export interface ToolCall {
   tool: string;
   status: ToolStatus;
@@ -67,6 +129,10 @@ export interface ChatResponse {
   /** Real district/destination names from the advisor's own retrieval -
    *  populated only in "advise" mode. Render as clickable chips. */
   suggested_options: string[];
+  /** The plan as structured days, when this turn produced one. */
+  itinerary: Itinerary | null;
+  /** Follow-up offers derived server-side from what has not run yet. */
+  suggested_actions: SuggestedAction[];
   needs_clarification: boolean;
   detected_language: string;
   destination: string | null;
@@ -223,6 +289,23 @@ export const api = {
     }),
 
   listSessions: () => request<SessionSummary[]>("/api/v1/sessions"),
+
+  /** Resolve a photograph for a place. Called lazily per card so a reply is
+   *  never held up waiting for pictures. */
+  placeImage: (params: {
+    name: string;
+    destination?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    kind?: string | null;
+  }) => {
+    const query = new URLSearchParams({ name: params.name });
+    if (params.destination) query.set("destination", params.destination);
+    if (params.latitude != null) query.set("latitude", String(params.latitude));
+    if (params.longitude != null) query.set("longitude", String(params.longitude));
+    if (params.kind) query.set("kind", params.kind);
+    return request<PlaceImageResult>(`/api/v1/images/place?${query.toString()}`);
+  },
 
   getSession: (id: string) =>
     request<{ session: SessionSummary; messages: StoredMessage[] }>(

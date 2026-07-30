@@ -30,6 +30,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
+import { ItineraryView } from "@/components/Itinerary";
 import { AuthGate } from "@/components/AuthGate";
 import {
   IconBed,
@@ -554,12 +555,20 @@ function Message({
   return (
     <div className="rise-in flex justify-start">
       <div className="w-full max-w-[94%]">
-        <Card className="px-4 py-3.5">
-          <FormattedText text={turn.content} />
-        </Card>
+        {meta?.itinerary ? (
+          <ItineraryView itinerary={meta.itinerary} />
+        ) : (
+          <Card className="px-4 py-3.5">
+            <FormattedText text={turn.content} />
+          </Card>
+        )}
 
         {meta && meta.mode === "advise" && meta.suggested_options.length > 0 && (
           <OptionChips options={meta.suggested_options} onPick={onPickOption} />
+        )}
+
+        {meta && meta.suggested_actions.length > 0 && (
+          <ActionChips actions={meta.suggested_actions} onPick={onPickOption} />
         )}
 
         {meta && (
@@ -593,6 +602,42 @@ function Message({
 
         {meta && showTrace && <Trace meta={meta} />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * "Want me to also…" offers under a reply.
+ *
+ * A live five-day Geneva plan never once mentioned that the agent could also
+ * find flights, a hotel or a restaurant - all three tools were available and
+ * the traveller had no way to know. These are that missing prompt.
+ *
+ * The list is built on the server from what is known and what has not run
+ * yet, so it can never offer a service the traveller switched off or one it
+ * has just delivered.
+ */
+function ActionChips({
+  actions,
+  onPick,
+}: {
+  actions: { label: string; message: string }[];
+  onPick: (message: string) => void;
+}) {
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-2">
+      <span className="text-[11px] text-[var(--color-ink-faint)]">Want me to also</span>
+      {actions.map((action) => (
+        <button
+          key={action.label}
+          type="button"
+          onClick={() => onPick(action.message)}
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-3 text-xs font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
+        >
+          {action.label}
+          <IconChevron size="0.85em" />
+        </button>
+      ))}
     </div>
   );
 }

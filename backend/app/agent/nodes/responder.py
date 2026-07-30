@@ -30,11 +30,12 @@ from typing import Final
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.agent.itinerary import ITINERARY_INSTRUCTIONS, Itinerary
 from app.agent.state import AgentState
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
-from app.services.llm import ModelRole, call_model
+from app.services.llm import ModelRole, call_model, structured_call
 
 logger = get_logger(__name__)
 
@@ -236,6 +237,22 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
             "here and offer to look into anything missing if they ask."
         )
 
+    # A multi-day trip is returned as structured days rather than prose, so
+    # the interface can render cards, photographs and map pins against real
+    # places. Scoped asks ("find me flights") stay prose - there is nothing to
+    # lay out, and forcing them through a day schema would be absurd.
+    wants_itinerary = (
+        scoped_service == "none"
+        and int((state.get("trip_state") or {}).get("duration_days") or 0) >= 1
+    )
+    if wants_itinerary:
+        itinerary = await _compose_itinerary(state, context_lines, cfg)
+        if itinerary is not None:
+            return _itinerary_response(state, itinerary)
+        # Fell through: structured generation failed, so carry on and write
+        # prose rather than failing a turn that has good research behind it.
+        logger.info("agent.itinerary_fallback_to_prose", run_id=state.get("run_id"))
+
     try:
         response = await call_model(
             ModelRole.EXECUTOR,
@@ -299,6 +316,135 @@ async def responder_node(state: AgentState, *, settings: Settings | None = None)
         else "completed",
         messages=[AIMessage(content=answer)],
     )
+
+
+async def _compose_itinerary(
+    state: AgentState, context_lines: list[str], cfg: Settings
+) -> Itinerary | None:
+    """Produce the plan as structured days.
+
+    Args:
+        state: Current graph state.
+        context_lines: The same context the prose composer would receive.
+        cfg: Application settings.
+
+    Returns:
+        The itinerary, or None if structured generation failed - in which case
+        the caller falls back to prose rather than losing the turn.
+    """
+    try:
+        itinerary = await structured_call(
+            ModelRole.EXECUTOR,
+            [
+                SystemMessage(
+                    content=RESPONDER_PROMPT.format(
+                        language_instruction=_language_instruction(
+                            state.get("detected_language", "en")
+                        )
+                    )
+                    + "\n\n"
+                    + ITINERARY_INSTRUCTIONS
+                ),
+                HumanMessage(content="\n".join(context_lines)),
+            ],
+            Itinerary,
+            purpose="compose_itinerary",
+            settings=cfg,
+        )
+    except ExternalServiceError as exc:
+        logger.warning("agent.itinerary_failed", error=exc.message)
+        return None
+
+    if not itinerary.days:
+        return None
+    return itinerary
+
+
+def _itinerary_response(state: AgentState, itinerary: Itinerary) -> AgentState:
+    """Package a structured itinerary as a turn result.
+
+    A plain-text rendering travels alongside it in `final_response`, because
+    that is what gets stored as the conversation message and read back on a
+    later turn. Without it, reopening a past conversation would show an empty
+    assistant bubble.
+
+    Args:
+        state: Current graph state.
+        itinerary: The composed plan.
+
+    Returns:
+        A partial state update.
+    """
+    text = render_itinerary_text(itinerary)
+
+    logger.info(
+        "agent.responded_structured",
+        days=len(itinerary.days),
+        items=len(itinerary.all_items()),
+        language=state.get("detected_language"),
+    )
+
+    return AgentState(
+        final_response=text,
+        itinerary=itinerary.model_dump(mode="json"),
+        status="partial"
+        if state.get("stopped_because") == "replan_budget_exhausted"
+        else "completed",
+        messages=[AIMessage(content=text)],
+    )
+
+
+def render_itinerary_text(itinerary: Itinerary) -> str:
+    """Render a structured itinerary as readable markdown.
+
+    Used for the stored message and as the reply for any client that does not
+    render the structured form. Kept deterministic - no model call - so the
+    text and the cards can never disagree about what the plan is.
+
+    Args:
+        itinerary: The plan.
+
+    Returns:
+        Markdown text.
+    """
+    lines: list[str] = []
+    if itinerary.intro:
+        lines.append(itinerary.intro)
+
+    slot_labels = (
+        ("morning", "Morning"),
+        ("afternoon", "Afternoon"),
+        ("evening", "Evening"),
+    )
+
+    for day in itinerary.days:
+        when = f" · {day.date}" if day.date else ""
+        lines.append(f"\n### Day {day.day_number}: {day.title}{when}")
+        if day.summary:
+            lines.append(day.summary)
+
+        for item in day.all_day:
+            lines.append(f"- **{item.name}** — {item.description}".rstrip(" —"))
+
+        for attribute, label in slot_labels:
+            items = getattr(day, attribute)
+            if not items:
+                continue
+            lines.append(f"\n**{label}**")
+            for item in items:
+                where = f" ({item.district})" if item.district else ""
+                detail = f" — {item.description}" if item.description else ""
+                lines.append(f"- **{item.name}**{where}{detail}")
+
+    if itinerary.practical_notes:
+        lines.append("\n### Good to know")
+        lines.extend(f"- {note}" for note in itinerary.practical_notes)
+
+    if itinerary.gaps:
+        lines.append("")
+        lines.extend(f"- {gap}" for gap in itinerary.gaps)
+
+    return "\n".join(lines).strip()
 
 
 def _language_instruction(language: str) -> str:

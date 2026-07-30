@@ -349,6 +349,37 @@ async def understand_node(
     # mostly backwaters" names no destination but continues the Kerala thread.
     effective_destination = understanding.destination or trip_state.get("destination")
 
+    # A date that has already passed is almost always a typo for next year,
+    # and planning it wastes the whole run. This was a real failure: a request
+    # for "8 july 2026" made on 30 July 2026 produced a complete five-day
+    # itinerary for a trip three weeks in the past, and the only hint was a
+    # buried line saying the forecast could not be checked. The weather tool
+    # had reported the problem accurately; nothing acted on it. Checked here,
+    # in code, because it is a fact about the calendar rather than a judgement.
+    past_date = _first_past_date(understanding.start_date, understanding.end_date)
+    if past_date is not None:
+        readable = past_date.strftime("%-d %B %Y") if _supports_dash_d() else past_date.isoformat()
+        return AgentState(
+            goal=understanding.goal,
+            mode="clarify",
+            trip_state=trip_state,
+            destination=effective_destination,
+            detected_language=understanding.detected_language,
+            constraints=merged_constraints,
+            memory_block=memory_block,
+            memory_ids=memory_ids,
+            needs_clarification=True,
+            clarifying_question=(
+                f"Just to check — {readable} has already passed. "
+                "Did you mean next year, or different dates? 📅"
+            ),
+            status="clarifying",
+            final_response=(
+                f"Just to check — {readable} has already passed. "
+                "Did you mean next year, or different dates? 📅"
+            ),
+        )
+
     # "find me flights to london" -> "from delhi" is one request spread over
     # two turns. The second turn doesn't repeat "flights", so without this
     # the scoped ask would be lost and the follow-up would fall through to
@@ -436,6 +467,43 @@ async def understand_node(
         update["final_response"] = clarifying_question
 
     return update
+
+
+def _supports_dash_d() -> bool:
+    """Whether this platform's strftime accepts the `%-d` (no zero pad) flag.
+
+    glibc does; the Windows C runtime does not and raises. Checked once rather
+    than assumed, so date phrasing does not crash the intake step on Windows.
+    """
+    try:
+        date.today().strftime("%-d")
+    except ValueError:
+        return False
+    return True
+
+
+def _first_past_date(*values: str | None) -> date | None:
+    """The earliest of these ISO dates that has already passed.
+
+    Args:
+        *values: Date strings, any of which may be None or malformed.
+
+    Returns:
+        The date, or None when all are in the future, absent or unparseable.
+        Unparseable is deliberately treated as "no problem here" - a malformed
+        date is the date parser's business, not this check's.
+    """
+    today = date.today()
+    for value in values:
+        if not value:
+            continue
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError:
+            continue
+        if parsed < today:
+            return parsed
+    return None
 
 
 def _trip_section(trip_state: dict[str, object]) -> str:

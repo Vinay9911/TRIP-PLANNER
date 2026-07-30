@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1.routes import admin, chat, health, memory
+from app.api.v1.routes import admin, chat, health, images, memory
 
 api_router = APIRouter()
 
@@ -19,4 +19,5 @@ api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(chat.router)
 api_router.include_router(memory.router)
+api_router.include_router(images.router)
 api_router.include_router(admin.router)

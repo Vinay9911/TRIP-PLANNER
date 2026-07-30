@@ -36,6 +36,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.graph import AgentDependencies, compile_graph, recursion_limit_for
 from app.agent.state import AgentState, initial_state
+from app.agent.trip_state import suggest_actions
 from app.core.config import Settings, get_settings
 from app.core.logging import bind_request_context, get_logger
 from app.db.repositories import SessionRepository, TraceRepository
@@ -76,6 +77,8 @@ class TurnResult:
     mode: str = "plan"
     trip_state: dict[str, Any] = None  # type: ignore[assignment]
     suggested_options: list[str] = None  # type: ignore[assignment]
+    itinerary: dict[str, Any] | None = None
+    suggested_actions: list[dict[str, str]] = None  # type: ignore[assignment]
     detected_language: str = "en"
     destination: str | None = None
     needs_clarification: bool = False
@@ -103,6 +106,37 @@ class TurnResult:
             self.trip_state = {}
         if self.suggested_options is None:
             self.suggested_options = []
+        if self.suggested_actions is None:
+            self.suggested_actions = []
+
+
+def _suggest_actions(
+    final_state: AgentState, records: list[ToolCallRecord]
+) -> list[dict[str, str]]:
+    """Work out what to offer the traveller next.
+
+    Lives here rather than in a node because it needs the tool-call record,
+    which is a property of the turn rather than of the graph state - the point
+    is to avoid offering a search that just ran.
+
+    Args:
+        final_state: The graph's final state.
+        records: Tool calls made during this turn.
+
+    Returns:
+        Follow-up offers, possibly empty.
+    """
+    # Never offered on a clarifying turn: the agent has just asked a question,
+    # and stacking three suggestions under it buries the thing it needs.
+    if final_state.get("mode") == "clarify" or final_state.get("needs_clarification"):
+        return []
+
+    return suggest_actions(
+        trip_state=final_state.get("trip_state") or {},
+        focus=final_state.get("focus"),
+        tools_used={record.tool_name for record in records},
+        destination=final_state.get("destination"),
+    )
 
 
 class AgentRunner:
@@ -270,6 +304,8 @@ class AgentRunner:
             mode=final_state.get("mode", "plan"),
             trip_state=dict(final_state.get("trip_state") or {}),
             suggested_options=list(final_state.get("suggested_options") or []),
+            itinerary=final_state.get("itinerary"),
+            suggested_actions=_suggest_actions(final_state, records),
             detected_language=final_state.get("detected_language", "en"),
             destination=final_state.get("destination"),
             needs_clarification=bool(final_state.get("needs_clarification")),

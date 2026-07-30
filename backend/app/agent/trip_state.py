@@ -248,6 +248,86 @@ def decide_mode(
     return "advise"
 
 
+def suggest_actions(
+    *,
+    trip_state: dict[str, Any],
+    focus: list[str] | None,
+    tools_used: set[str],
+    destination: str | None,
+) -> list[dict[str, str]]:
+    """Offer the obvious next things the traveller has not asked for yet.
+
+    A live plan for Geneva ran to five days and never once mentioned that the
+    agent could also find flights, a hotel or a restaurant - the tools were
+    right there and the traveller had no way to know. These are the offers
+    that close that gap.
+
+    Derived in code rather than asked of the model, for three reasons: it
+    cannot offer a service the traveller switched off, it cannot offer one it
+    has already delivered this turn, and it costs no tokens.
+
+    Args:
+        trip_state: The conversation's slot ledger.
+        focus: Services enabled in the composer.
+        tools_used: Tool names called during this turn.
+        destination: Where the trip is.
+
+    Returns:
+        Up to three offers, each with a `label` for the chip and the `message`
+        it sends when tapped.
+    """
+    if not destination:
+        return []
+
+    enabled = set(normalise_focus(focus))
+    offers: list[dict[str, str]] = []
+
+    origin = trip_state.get("origin")
+    if "flights" in enabled and "search_flights" not in tools_used:
+        if origin:
+            offers.append(
+                {
+                    "label": f"Flights from {origin}",
+                    "message": f"Find me flights from {origin} to {destination}.",
+                }
+            )
+        else:
+            offers.append(
+                {
+                    "label": "Check flights",
+                    "message": f"Find me flights to {destination}. I'll tell you where from.",
+                }
+            )
+
+    if "stays" in enabled and "search_accommodation" not in tools_used:
+        offers.append(
+            {
+                "label": "Where to stay",
+                "message": f"Where should I stay in {destination}?",
+            }
+        )
+
+    if "restaurants" in enabled and "find_places" not in tools_used:
+        offers.append(
+            {
+                "label": "Places to eat",
+                "message": f"Recommend some places to eat in {destination}.",
+            }
+        )
+
+    if "get_weather_forecast" not in tools_used:
+        offers.append(
+            {
+                "label": "Weather",
+                "message": f"What's the weather like in {destination} for those dates?",
+            }
+        )
+
+    # Three is the point at which a row of chips stops reading as helpful
+    # suggestions and starts reading as a menu the user has to work through.
+    return offers[:3]
+
+
 def missing_slots(trip_state: dict[str, Any]) -> list[str]:
     """Which slots are still worth asking about, most important first.
 

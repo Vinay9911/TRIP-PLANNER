@@ -110,6 +110,22 @@ class ChatResponse(BaseModel):
             "What a client renders as the trip panel."
         ),
     )
+    itinerary: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "The plan as structured days, when this turn produced one. Clients "
+            "render day cards, photos and map pins from this; `response` "
+            "carries the same plan as markdown for anything that cannot."
+        ),
+    )
+    suggested_actions: list[dict[str, str]] = Field(
+        default_factory=list,
+        description=(
+            "Follow-up offers, each with a `label` and the `message` it sends "
+            "when tapped. Derived in code from what is known and what has not "
+            "run yet, so a switched-off service is never offered."
+        ),
+    )
     suggested_options: list[str] = Field(
         default_factory=list,
         description=(
