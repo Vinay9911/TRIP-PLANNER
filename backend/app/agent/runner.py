@@ -41,7 +41,7 @@ from app.core.logging import bind_request_context, get_logger
 from app.db.repositories import SessionRepository, TraceRepository
 from app.memory.service import MemoryService
 from app.rag.retriever import MultiHopRetriever
-from app.services.usage import TokenUsage, start_metering, stop_metering
+from app.services.usage import TokenUsage, start_metering, stop_metering, total_rag_hops
 from app.tools.base import ToolCallRecord, start_recording, stop_recording
 from app.tools.context import ToolContext, reset_tool_context, set_tool_context
 
@@ -84,6 +84,7 @@ class TurnResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     token_breakdown: list[dict[str, object]] = None  # type: ignore[assignment]
+    rag_hops: int = 0
     user_message_id: str | None = None
     assistant_message_id: str | None = None
 
@@ -197,6 +198,17 @@ class AgentRunner:
                 records=records,
             )
         finally:
+            # Read the hop count before stop_metering() clears the ContextVar
+            # it lives in - reading it after returned 0 for every run, since
+            # `total_rag_hops()` has nothing left to read once the context is
+            # cleared. `meter` itself doesn't have this problem: it is a plain
+            # object obtained from start_metering() and held by this local
+            # variable, so stop_metering() clearing the *ContextVar binding*
+            # doesn't affect the object it used to point to. rag_hops has no
+            # equivalent object to hold onto, only this function call, so the
+            # read has to happen before the clear rather than after.
+            rag_hops = total_rag_hops()
+
             # Both must unwind even on failure: a leaked tool context would
             # let the next request inherit this user's identity.
             reset_tool_context(context_token)
@@ -246,6 +258,7 @@ class AgentRunner:
             prompt_tokens=meter.prompt_tokens,
             completion_tokens=meter.completion_tokens,
             token_breakdown=meter.summary(),
+            rag_hops=rag_hops,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
         )
@@ -335,7 +348,7 @@ class AgentRunner:
                 initial_plan=result.plan,
                 replan_count=result.replan_count,
                 injected_memory_ids=state.get("memory_ids", []),
-                rag_hops=state.get("rag_hops", 0),
+                rag_hops=result.rag_hops,
                 detected_language=result.detected_language,
                 latency_ms=result.latency_ms,
                 response_message_id=result.assistant_message_id,

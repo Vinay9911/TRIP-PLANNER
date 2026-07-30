@@ -58,6 +58,31 @@ SKIPPED_SECTIONS: Final[frozenset[str]] = frozenset(
 
 MAX_DISTRICTS: Final[int] = 60
 
+# Headings under which a region-level article (a country, a state, a large
+# area with no district subpages) lists its own children. Checked in order;
+# the first one present is used.
+_CHILD_DESTINATION_HEADINGS: Final[tuple[str, ...]] = (
+    "Cities",
+    "Regions",
+    "Districts",
+    "Other destinations",
+)
+
+# A Wikivoyage numbered listing entry: "1 Kalpetta - capital of Wayanad...".
+# Matches the leading number and captures the name up to the first dash,
+# en-dash or opening parenthesis - the point where the description starts.
+# Curly apostrophe and en-dash are built from chr() rather than pasted
+# literally, since both are visually indistinguishable from their ASCII
+# counterparts in most editors and a future reader could not otherwise tell
+# which one a given character actually is.
+_NAME_PUNCTUATION = "'" + chr(0x2019) + ".-"
+_DASH_CLASS = "(" + chr(0x2013) + "-"
+_CHILD_LISTING = re.compile(
+    rf"^\d{{1,2}}\s+([A-Z][\w{_NAME_PUNCTUATION}]*(?:\s+[A-Z][\w{_NAME_PUNCTUATION}]*){{0,3}})"
+    rf"(?:\s*[{_DASH_CLASS}]|\s*$)",
+    re.MULTILINE,
+)
+
 
 @dataclass
 class Article:
@@ -165,6 +190,56 @@ def parse_sections(extract: str) -> list[tuple[str, str]]:
     ]
 
 
+def extract_child_destinations(sections: list[tuple[str, str]]) -> list[str]:
+    """Pull candidate place names from a region article's own listings.
+
+    For a city like Kyoto, districts are addressable subpages and
+    `list_districts` finds them directly. A state or country article - Kerala,
+    say - has no such subpages, but its `Cities` or `Regions` section is a
+    numbered list of real places in exactly the format Wikivoyage uses for
+    every listing: `1 Kalpetta - capital of Wayanad district...`.
+
+    This extracts the leading name from each entry. The names are candidates,
+    not confirmed articles - `WikivoyageClient.resolve_child_destinations`
+    validates each one by attempting to resolve it, the same way any
+    destination name is resolved, so a name that turns out not to have its own
+    article costs nothing rather than producing a failed fetch downstream.
+
+    Args:
+        sections: Parsed `(heading, text)` pairs from `parse_sections`.
+
+    Returns:
+        Candidate names in the order they appeared, deduplicated.
+    """
+    by_heading = dict(sections)
+
+    # Iterate the priority list, not the article's own section order. Kerala's
+    # article happens to put "Regions" before "Cities", and the first
+    # implementation of this function returned whichever heading it met
+    # first while walking the article - silently preferring the broader,
+    # less useful Regions listing whenever it came first, which a test
+    # constructed the other way around than the live article caught
+    # immediately.
+    for heading in _CHILD_DESTINATION_HEADINGS:
+        text = by_heading.get(heading)
+        if text is None:
+            continue
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for match in _CHILD_LISTING.finditer(text):
+            name = match.group(1).strip()
+            key = name.lower()
+            if name and key not in seen:
+                seen.add(key)
+                candidates.append(name)
+
+        if candidates:
+            return candidates[:MAX_DISTRICTS]
+
+    return []
+
+
 class WikivoyageClient:
     """Fetches articles and district listings from Wikivoyage.
 
@@ -264,6 +339,55 @@ class WikivoyageClient:
         )
         titles = [page["title"] for page in payload.get("query", {}).get("allpages", [])]
         return _deduplicate_districts(titles)
+
+    async def resolve_child_destinations(self, candidates: list[str]) -> list[str]:
+        """Confirm which candidate names have their own Wikivoyage article.
+
+        `extract_child_destinations` reads names out of prose - "Kalpetta",
+        "Alappuzha" - which are real places but not guaranteed to be article
+        titles verbatim, or articles at all (a small town might only ever be
+        mentioned inside its district's page). Each candidate is resolved the
+        same way any top-level destination is, via search, so a name with no
+        article of its own is dropped rather than causing a failed fetch two
+        steps later.
+
+        Args:
+            candidates: Names extracted from a region article's listings.
+
+        Returns:
+            Resolved, deduplicated article titles, in the input order.
+            Capped and run concurrently since this can be several lookups.
+        """
+        if not candidates:
+            return []
+
+        import asyncio
+
+        # A firm cap independent of MAX_DISTRICTS: each entry costs a search
+        # API call, and a region article can list dozens of "other
+        # destinations" that are not worth that cost for a travel-planning
+        # request that will only ever use two or three of them.
+        bounded = candidates[:15]
+        results = await asyncio.gather(
+            *(self.find_article_title(name) for name in bounded),
+            return_exceptions=True,
+        )
+
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for name, title in zip(bounded, results, strict=True):
+            if isinstance(title, BaseException) or not title:
+                continue
+            # A search for "Kalpetta" can resolve to an unrelated same-named
+            # article elsewhere in the world; requiring the resolved title to
+            # start with the candidate name is a cheap guard against that.
+            if not title.lower().startswith(name.lower()[:4]):
+                continue
+            if title not in seen:
+                seen.add(title)
+                resolved.append(title)
+
+        return resolved
 
     async def fetch_article(self, title: str) -> Article | None:
         """Fetch and parse one article.

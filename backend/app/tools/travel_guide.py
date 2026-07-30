@@ -17,6 +17,7 @@ from typing import Final
 
 from app.core.logging import get_logger
 from app.rag.retriever import SECTIONS_FOR_INTENT
+from app.services.usage import record_rag_hops
 from app.tools.base import ToolResult, resilient_tool
 from app.tools.context import get_tool_context
 
@@ -105,6 +106,8 @@ async def search_travel_guide(
         constraints=constraints or None,
         intent=normalised_intent,
     )
+
+    record_rag_hops(len(result.hops))
 
     if result.is_empty:
         return ToolResult.ok(

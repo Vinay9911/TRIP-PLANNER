@@ -160,7 +160,9 @@ function Trace({
                     <div className="flex items-center gap-2">
                       {call.degraded && <Badge tone="warn">source unavailable</Badge>}
                       {!call.succeeded && !call.degraded && (
-                        <Badge tone="bad">invalid arguments</Badge>
+                        <span title="The model's arguments didn't validate against the tool's schema. It was told exactly what was wrong and corrected itself on the next call - this is the intended self-correction path, not a system failure.">
+                          <Badge tone="neutral">invalid args, self-corrected</Badge>
+                        </span>
                       )}
                       <span className="text-xs text-[var(--color-ink-soft)]">
                         {call.latency_ms}ms

@@ -63,6 +63,14 @@ class TokenUsage:
 
 _meter: ContextVar[TokenUsage | None] = ContextVar("token_usage", default=None)
 
+# Separate from TokenUsage because it is written from a different layer - the
+# RAG retriever, which has no reason to know about token accounting - and
+# read back by the runner alongside it. `rag_hops` was declared on AgentState
+# and on the agent_runs table from the start but nothing ever wrote to it, so
+# every run reported zero hops regardless of how much retrieval actually
+# happened; this is what closes that gap.
+_hop_counter: ContextVar[list[int] | None] = ContextVar("rag_hop_counter", default=None)
+
 
 def start_metering() -> TokenUsage:
     """Begin metering token usage for the current context.
@@ -72,12 +80,14 @@ def start_metering() -> TokenUsage:
     """
     meter = TokenUsage()
     _meter.set(meter)
+    _hop_counter.set([0])
     return meter
 
 
 def stop_metering() -> None:
     """Stop metering for the current context."""
     _meter.set(None)
+    _hop_counter.set(None)
 
 
 def record(purpose: str, prompt: int, completion: int) -> None:
@@ -91,3 +101,24 @@ def record(purpose: str, prompt: int, completion: int) -> None:
     meter = _meter.get()
     if meter is not None:
         meter.add(purpose, prompt, completion)
+
+
+def record_rag_hops(count: int) -> None:
+    """Add to the current run's multi-hop retrieval count.
+
+    Called once per `search_travel_guide` invocation with however many hops
+    that retrieval actually took, so a run touching the tool several times
+    reports the true total rather than the count from a single call.
+
+    Args:
+        count: Hops performed by one retrieval.
+    """
+    counter = _hop_counter.get()
+    if counter is not None:
+        counter[0] += count
+
+
+def total_rag_hops() -> int:
+    """Return the current run's accumulated hop count."""
+    counter = _hop_counter.get()
+    return counter[0] if counter is not None else 0

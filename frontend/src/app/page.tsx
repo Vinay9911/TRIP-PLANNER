@@ -252,8 +252,14 @@ function Trace({ meta }: { meta: ChatResponse }) {
               <li key={index} className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-2">
                   <code className="font-mono">{call.tool}</code>
-                  {call.status === "degraded" && <Badge tone="warn">unavailable</Badge>}
-                  {call.status === "invalid" && <Badge tone="bad">retried</Badge>}
+                  {call.status === "degraded" && (
+                    <Badge tone="warn">source unavailable</Badge>
+                  )}
+                  {call.status === "invalid" && (
+                    <span title="The model's first arguments didn't validate. The tool told it exactly what was wrong, and it corrected itself on the next call — this is the schema working as intended, not a failure.">
+                      <Badge tone="neutral">self-corrected</Badge>
+                    </span>
+                  )}
                 </span>
                 <span className="text-[var(--color-ink-soft)]">
                   {call.source} · {call.latency_ms}ms

@@ -48,6 +48,7 @@ for exactly one run.
 from __future__ import annotations
 
 import functools
+import inspect
 import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -186,41 +187,73 @@ def stop_recording() -> None:
     _result_cache.set(None)
 
 
+def _bind_arguments(
+    func: Callable[..., Awaitable[ToolResult]], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve a call's positional and keyword arguments to one name-keyed dict.
+
+    This is the fix for a bug that shipped once already: the trace recorder
+    and the cache key both originally read `**kwargs` only, on the assumption
+    that every tool would always be called with keywords. `registry.py` called
+    every tool positionally instead, so the trace silently recorded `{}` for
+    every single call and the result cache never had a stable key to hit.
+
+    Binding against the function's actual signature - via `inspect.signature`,
+    the same mechanism Python itself uses to resolve a call - makes the
+    downstream code correct regardless of how the caller invokes it, rather
+    than relying on every present and future call site to happen to use
+    keywords. That is a structurally safer fix than fixing the one call site
+    that broke it this time.
+
+    Args:
+        func: The wrapped tool function.
+        args: Positional arguments from the actual call.
+        kwargs: Keyword arguments from the actual call.
+
+    Returns:
+        Every supplied argument, keyed by parameter name. Falls back to an
+        empty dict if binding fails for some unanticipated reason - a
+        degraded trace is preferable to a broken tool call.
+    """
+    try:
+        bound = inspect.signature(func).bind_partial(*args, **kwargs)
+    except TypeError:  # pragma: no cover - defensive; a real call always binds
+        return {}
+    return dict(bound.arguments)
+
+
 def _cache_key(
     tool_name: str,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
+    bound_arguments: dict[str, Any],
     cache_on: tuple[str, ...] | None = None,
 ) -> str:
     """Build a stable cache key from a tool call's name and arguments.
 
-    **Positional arguments are part of the key.** The model always calls
-    through the registry with keywords, but the tools are plain functions and
-    are called positionally elsewhere - in tests, and by other tools. Keying on
-    keywords alone made every positional call collide on the same key, so a
-    Delhi-to-Goa search returned the London-to-Sydney result.
-
-    Keywords are sorted so argument order cannot produce two keys for one call,
-    and serialisation falls back to `str` so an unserialisable argument
-    degrades to a cache miss rather than raising.
-
     Args:
         tool_name: The tool being called.
-        args: Its positional arguments.
-        kwargs: Its keyword arguments.
-        cache_on: Keyword-argument names that determine the result. When given,
-            only these are used, so cosmetic rewording of the others still
-            hits the cache.
+        bound_arguments: Every argument, keyed by parameter name regardless of
+            how the caller passed it - see `_bind_arguments`.
+        cache_on: Parameter names that determine the result. When given, only
+            these are used, so cosmetic rewording of the others still hits
+            the cache. This is what makes `search_travel_guide` cache on
+            destination alone: a model rewording its `question` on every call
+            must not defeat caching aimed at exactly that rewording.
 
     Returns:
         A cache key.
     """
     import json
 
+    if cache_on:
+        identifying = {
+            name: str(bound_arguments.get(name, "")).strip().lower() for name in cache_on
+        }
+        return f"{tool_name}:{json.dumps(identifying, sort_keys=True)}"
+
     try:
-        rendered = json.dumps({"a": list(args), "k": kwargs}, sort_keys=True, default=str)
+        rendered = json.dumps(bound_arguments, sort_keys=True, default=str)
     except (TypeError, ValueError):  # pragma: no cover - defensive
-        rendered = f"{args}:{sorted(kwargs.items())}"
+        rendered = str(sorted(bound_arguments.items(), key=str))
     return f"{tool_name}:{rendered}"
 
 
@@ -295,8 +328,13 @@ def resilient_tool(
             error_code: str | None = None
             error_message: str | None = None
 
+            bound_arguments = _bind_arguments(func, args, kwargs)
+            recordable_arguments = {
+                name: value for name, value in bound_arguments.items() if _is_recordable(value)
+            }
+
             cache = _result_cache.get()
-            key = _cache_key(tool_name, args, kwargs, cache_on) if cache is not None else ""
+            key = _cache_key(tool_name, bound_arguments, cache_on) if cache is not None else ""
 
             if cache is not None and key in cache:
                 cached_result = cache[key].model_copy(update={"cached": True})
@@ -304,7 +342,7 @@ def resilient_tool(
                 _record(
                     ToolCallRecord(
                         tool_name=tool_name,
-                        arguments={k: v for k, v in kwargs.items() if _is_recordable(v)},
+                        arguments=recordable_arguments,
                         status=cached_result.status,
                         source=source,
                         latency_ms=0,
@@ -351,13 +389,7 @@ def resilient_tool(
             _record(
                 ToolCallRecord(
                     tool_name=tool_name,
-                    # Positional args are dropped deliberately: every tool in
-                    # this project is called with keywords by the model, and
-                    # `args` would otherwise capture `self`-like values that
-                    # are noise in a trace.
-                    arguments={
-                        key: value for key, value in kwargs.items() if _is_recordable(value)
-                    },
+                    arguments=recordable_arguments,
                     status=result.status,
                     source=source,
                     latency_ms=latency_ms,

@@ -18,6 +18,15 @@ selection without any hardcoded routing.
 
 Nothing in this system inspects a user message for keywords to decide which
 tool to run. The model chooses, every time, from these descriptions alone.
+
+**Every call into the underlying implementation uses keyword arguments,
+never positional ones.** This was a real bug, not a style choice: the tools
+are wrapped by `resilient_tool` (see `app/tools/base.py`), which records each
+call's arguments for the admin trace and, for expensive tools, computes a
+cache key from named arguments. Both read `**kwargs` only. A positional call
+arrives as `*args`, so the trace silently recorded `{}` for every single tool
+call, and result caching silently never activated - discovered by pulling a
+real run's trace and finding every `arguments` column empty.
 """
 
 from __future__ import annotations
@@ -76,7 +85,11 @@ async def get_weather_forecast(
         start_date: First day as YYYY-MM-DD. Defaults to today.
         end_date: Last day as YYYY-MM-DD. Defaults to the day after start.
     """
-    return _serialise(await weather.get_weather_forecast(location, start_date, end_date))
+    return _serialise(
+        await weather.get_weather_forecast(
+            location=location, start_date=start_date, end_date=end_date
+        )
+    )
 
 
 @tool
@@ -110,7 +123,13 @@ async def find_places(
         limit: Maximum places to return.
     """
     return _serialise(
-        await places.find_places(location, categories, conditions, radius_metres, limit)
+        await places.find_places(
+            location=location,
+            categories=categories,
+            conditions=conditions,
+            radius_metres=radius_metres,
+            limit=limit,
+        )
     )
 
 
@@ -143,7 +162,12 @@ async def search_travel_guide(
             ["vegetarian"]. Pass them here rather than inside `question`.
     """
     return _serialise(
-        await travel_guide.search_travel_guide(destination, question, intent, constraints)
+        await travel_guide.search_travel_guide(
+            destination=destination,
+            question=question,
+            intent=intent,
+            constraints=constraints,
+        )
     )
 
 
@@ -168,7 +192,14 @@ async def search_web(
         recent_only: Restrict to the past month. Good for events and
             closures, wrong for general background.
     """
-    return _serialise(await web_search.search_web(query, max_results, deep_search, recent_only))
+    return _serialise(
+        await web_search.search_web(
+            query=query,
+            max_results=max_results,
+            deep_search=deep_search,
+            recent_only=recent_only,
+        )
+    )
 
 
 @tool
@@ -196,7 +227,12 @@ async def search_flights(
     """
     return _serialise(
         await travel_logistics.search_flights(
-            origin, destination, departure_date, return_date, cabin, adults
+            origin=origin,
+            destination=destination,
+            departure_date=departure_date,
+            return_date=return_date,
+            cabin=cabin,
+            adults=adults,
         )
     )
 
@@ -225,7 +261,11 @@ async def search_accommodation(
     """
     return _serialise(
         await travel_logistics.search_accommodation(
-            city, check_in, check_out, guests, max_price_per_night
+            city=city,
+            check_in=check_in,
+            check_out=check_out,
+            guests=guests,
+            max_price_per_night=max_price_per_night,
         )
     )
 
@@ -244,7 +284,7 @@ async def recall_user_preferences(query: str, limit: int = 6) -> dict[str, Any]:
             after, e.g. "dietary restrictions and food preferences".
         limit: Maximum facts to return, 1-15.
     """
-    return _serialise(await memory_tools.recall_user_preferences(query, limit))
+    return _serialise(await memory_tools.recall_user_preferences(query=query, limit=limit))
 
 
 @tool
@@ -271,7 +311,9 @@ async def save_user_preference(
             transport, interests, climate, companions, pets, home_base,
             languages, visited, avoid, or other.
     """
-    return _serialise(await memory_tools.save_user_preference(fact, category, subject))
+    return _serialise(
+        await memory_tools.save_user_preference(fact=fact, category=category, subject=subject)
+    )
 
 
 # ---------------------------------------------------------------------------

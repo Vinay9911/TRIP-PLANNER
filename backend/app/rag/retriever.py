@@ -52,7 +52,7 @@ from pydantic import BaseModel, Field
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
-from app.rag.corpus import WikivoyageClient
+from app.rag.corpus import WikivoyageClient, extract_child_destinations
 from app.rag.index import RagIndex, RetrievedChunk, ensure_indexed
 from app.services.embeddings import EmbeddingService
 from app.services.llm import ModelRole, structured_call
@@ -140,6 +140,11 @@ class RetrievalResult:
         districts_considered: All districts the city offers.
         districts_selected: Those actually investigated.
         stopped_because: Which stop condition ended the loop.
+        used_region_fallback: True when `districts_considered` came from
+            parsing a region article's own Cities/Regions listing rather than
+            from real `City/District` subpages - the path taken for a state or
+            country rather than a city. Surfaced so the trace can show which
+            mechanism actually ran.
     """
 
     chunks: list[RetrievedChunk] = field(default_factory=list)
@@ -147,6 +152,7 @@ class RetrievalResult:
     districts_considered: list[str] = field(default_factory=list)
     districts_selected: list[str] = field(default_factory=list)
     stopped_because: str = ""
+    used_region_fallback: bool = False
 
     @property
     def is_empty(self) -> bool:
@@ -299,8 +305,24 @@ class MultiHopRetriever:
             return None
 
         districts = await self.client.list_districts(city_title)
+
+        # A region-level article - a state, a country - has no `City/District`
+        # subpages, so the query above returns nothing even though the article
+        # itself lists its cities in plain prose. Falling back to that listing
+        # is what makes hop 2 real for a destination like "Kerala" instead of
+        # silently degrading to a single flat retrieval - confirmed by
+        # checking a real run's trace, where `districts_available` was empty
+        # for a request about Kerala despite the article having a proper
+        # "Cities" section.
+        used_fallback = False
+        if not districts:
+            candidates = extract_child_destinations(article.sections)
+            districts = await self.client.resolve_child_destinations(candidates)
+            used_fallback = bool(districts)
+
         article.districts = districts
         result.districts_considered = districts
+        result.used_region_fallback = used_fallback
 
         await ensure_indexed(article, self.index, self.embeddings, settings=self.settings)
 
@@ -376,7 +398,9 @@ class MultiHopRetriever:
                 name="narrow",
                 query=hop_query,
                 derived_from=(
-                    f"hop 1 district list ({len(result.districts_considered)} candidates)"
+                    "hop 1 "
+                    + ("region Cities listing" if result.used_region_fallback else "district list")
+                    + f" ({len(result.districts_considered)} candidates)"
                 ),
                 documents=indexed,
                 chunks_returned=len(chunks),
