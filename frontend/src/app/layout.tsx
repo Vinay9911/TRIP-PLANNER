@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Poppins } from "next/font/google";
 
+import { CursorGlow } from "@/components/CursorGlow";
+
 import "./globals.css";
 
 /*
@@ -50,6 +52,7 @@ export default function RootLayout({
         {/* Decorative only, and marked so: it is a colour wash with no
             information in it, so screen readers should skip it. */}
         <div className="app-backdrop" aria-hidden />
+        <CursorGlow />
         <div className="relative z-10">{children}</div>
       </body>
     </html>

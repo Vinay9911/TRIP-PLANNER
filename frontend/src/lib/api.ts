@@ -318,6 +318,16 @@ export const api = {
   listMemories: (includeInactive = false) =>
     request<Memory[]>(`/api/v1/me/memories?include_inactive=${includeInactive}`),
 
+  addMemory: (body: {
+    content: string;
+    memory_type?: "constraint" | "preference" | "identity" | "experience";
+    subject?: string;
+  }) =>
+    request<Memory>("/api/v1/me/memories", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   deleteMemory: (id: string) =>
     request<void>(`/api/v1/me/memories/${id}`, { method: "DELETE" }),
 

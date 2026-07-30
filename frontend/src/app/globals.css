@@ -157,6 +157,68 @@ body {
   animation: shimmer 1.4s infinite;
 }
 
+/* Leaflet's stylesheet, imported here rather than in the component so the
+   map's tiles and controls are styled the moment it mounts. Its own chrome is
+   toned down below to sit inside this palette rather than beside it. */
+@import "leaflet/dist/leaflet.css";
+
+.leaflet-container {
+  font: inherit;
+  background: var(--color-surface-2);
+}
+
+.leaflet-control-zoom a {
+  color: var(--color-ink) !important;
+  border-color: var(--color-line) !important;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  border-radius: 12px;
+  color: var(--color-ink);
+  box-shadow: 0 10px 30px -18px rgb(44 31 43 / 0.6);
+}
+
+.leaflet-control-attribution {
+  background: rgb(255 255 255 / 0.8) !important;
+  font-size: 10px !important;
+}
+
+/* -- Pointer companion ----------------------------------------------------
+   A soft glow that trails the cursor. Two rules keep it from being a
+   nuisance: `pointer-events: none` so it can never swallow a click, and it is
+   only mounted at all on devices with a real pointer and no reduced-motion
+   preference (see components/CursorGlow.tsx). */
+.cursor-glow {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  pointer-events: none;
+  border-radius: 999px;
+  mix-blend-mode: multiply;
+  will-change: transform;
+}
+
+.cursor-glow--halo {
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  background: radial-gradient(
+    circle,
+    rgb(232 93 44 / 0.28) 0%,
+    rgb(232 93 44 / 0.1) 45%,
+    transparent 70%
+  );
+}
+
+.cursor-glow--dot {
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  background: rgb(194 65 12 / 0.85);
+}
+
 /* Thin, unobtrusive scrollbars for the sidebar and transcript. */
 .scroll-slim {
   scrollbar-width: thin;

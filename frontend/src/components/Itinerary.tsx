@@ -34,6 +34,7 @@ import {
   IconSparkle,
   IconTicket,
 } from "@/components/icons";
+import { PlaceMap, dayColor, type MappedItem } from "@/components/PlaceMap";
 import { Badge, Card } from "@/components/ui";
 import { api, type Itinerary, type ItineraryDay, type ItineraryItem } from "@/lib/api";
 
@@ -156,15 +157,29 @@ function ItemPhoto({
 function Item({
   item,
   destination,
+  stopNumber,
+  dayNumber,
+  active,
+  onHover,
 }: {
   item: ItineraryItem;
   destination: string;
+  stopNumber?: number;
+  dayNumber: number;
+  active?: boolean;
+  onHover?: (index: number | null) => void;
 }) {
   const Glyph = KIND_ICON[item.kind] ?? IconPin;
   const tint = KIND_TINT[item.kind] ?? KIND_TINT.note;
 
   return (
-    <li className="flex gap-3 rounded-xl p-2 transition-colors duration-200 hover:bg-[var(--color-surface-2)]">
+    <li
+      onMouseEnter={() => stopNumber != null && onHover?.(stopNumber)}
+      onMouseLeave={() => onHover?.(null)}
+      className={`flex gap-3 rounded-xl p-2 transition-colors duration-200 ${
+        active ? "bg-[var(--color-brand-soft)]" : "hover:bg-[var(--color-surface-2)]"
+      }`}
+    >
       <ItemPhoto
         name={item.name}
         destination={destination}
@@ -178,6 +193,15 @@ function Item({
           <span className={`grid h-5 w-5 place-items-center rounded-md ${tint}`}>
             <Glyph size="0.8em" />
           </span>
+          {stopNumber != null && (
+            <span
+              className="grid h-4 w-4 place-items-center rounded-full text-[9px] font-semibold text-white"
+              style={{ background: dayColor(dayNumber) }}
+              aria-hidden
+            >
+              {stopNumber}
+            </span>
+          )}
           <span className="font-display text-sm font-semibold">{item.name}</span>
           {item.district && (
             <span className="text-[11px] text-[var(--color-ink-faint)]">{item.district}</span>
@@ -204,7 +228,19 @@ function Item({
   );
 }
 
-function Day({ day, destination }: { day: ItineraryDay; destination: string }) {
+function Day({
+  day,
+  destination,
+  stopNumberOf,
+  activeIndex,
+  onHover,
+}: {
+  day: ItineraryDay;
+  destination: string;
+  stopNumberOf?: (item: ItineraryItem) => number | undefined;
+  activeIndex?: number | null;
+  onHover?: (index: number | null) => void;
+}) {
   const [open, setOpen] = useState(true);
   const total =
     day.all_day.length + day.morning.length + day.afternoon.length + day.evening.length;
@@ -254,9 +290,20 @@ function Day({ day, destination }: { day: ItineraryDay; destination: string }) {
                   </h4>
                 )}
                 <ul className="mt-0.5 space-y-0.5">
-                  {items.map((item, index) => (
-                    <Item key={`${item.name}-${index}`} item={item} destination={destination} />
-                  ))}
+                  {items.map((item, index) => {
+                    const stopNumber = stopNumberOf?.(item);
+                    return (
+                      <Item
+                        key={`${item.name}-${index}`}
+                        item={item}
+                        destination={destination}
+                        stopNumber={stopNumber}
+                        dayNumber={day.day_number}
+                        active={stopNumber != null && stopNumber === activeIndex}
+                        onHover={onHover}
+                      />
+                    );
+                  })}
                 </ul>
               </section>
             );
@@ -269,9 +316,61 @@ function Day({ day, destination }: { day: ItineraryDay; destination: string }) {
 
 export function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
   const destination = itinerary.destination;
+  const [showMap, setShowMap] = useState(false);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+
+  // Number every stop once across the whole trip, so a marker's label matches
+  // the order someone would actually do them in.
+  const mapped: MappedItem[] = [];
+  let counter = 0;
+  for (const day of itinerary.days) {
+    for (const item of [...day.all_day, ...day.morning, ...day.afternoon, ...day.evening]) {
+      counter += 1;
+      mapped.push({ ...item, index: counter, dayNumber: day.day_number });
+    }
+  }
+  const mappable = mapped.filter((item) => item.latitude != null && item.longitude != null);
+
+  // Only mapped stops are numbered: a number beside a card whose pin does not
+  // exist would point at nothing.
+  const numberByName = new Map(mappable.map((item) => [item.name, item.index]));
+  const stopNumberOf = (item: ItineraryItem) => numberByName.get(item.name);
 
   return (
     <div className="space-y-2.5">
+      {mappable.length > 0 && (
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => setShowMap((value) => !value)}
+            aria-expanded={showMap}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-3 text-xs font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
+          >
+            <IconPin size="0.95em" />
+            {showMap ? "Hide map" : `Show map (${mappable.length} stops)`}
+          </button>
+        </div>
+      )}
+
+      {/* Grid-rows transition rather than max-height: it animates to the
+          content's real height, so a long plan does not clip and a short one
+          does not leave a gap. */}
+      <div
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+          showMap ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="overflow-hidden">
+          {showMap && (
+            <PlaceMap
+              items={mappable}
+              activeIndex={activeIndex}
+              onHoverItem={setActiveIndex}
+              className="h-72 sm:h-80"
+            />
+          )}
+        </div>
+      </div>
       {itinerary.intro && (
         <Card className="flex gap-3 overflow-hidden">
           <ItemPhoto
@@ -298,7 +397,14 @@ export function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
       )}
 
       {itinerary.days.map((day) => (
-        <Day key={day.day_number} day={day} destination={destination} />
+        <Day
+          key={day.day_number}
+          day={day}
+          destination={destination}
+          stopNumberOf={stopNumberOf}
+          activeIndex={activeIndex}
+          onHover={setActiveIndex}
+        />
       ))}
 
       {itinerary.practical_notes.length > 0 && (

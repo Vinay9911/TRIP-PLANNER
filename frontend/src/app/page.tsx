@@ -1,877 +1,402 @@
 "use client";
 
 /**
- * The chat page.
+ * The public landing page.
  *
- * Choices worth noting.
+ * The chat used to live at `/`, which meant the first thing anyone saw was an
+ * empty input box - fine once you know what the thing does, useless as an
+ * introduction. The chat moved to `/chat` and this took its place.
  *
- * **A conversation is a URL.** `?session=<id>` selects a stored conversation
- * and its transcript is loaded from the server. Before this, sessions were
- * being persisted correctly but nothing could reach them - every visit
- * started blank and previous trips were effectively lost. Making it a query
- * parameter also means a conversation can be linked to and reloaded.
+ * It is deliberately honest about mechanism rather than making claims. The
+ * three-gear section shows the actual routing rule, the tool grid names the
+ * real data sources including the one that is simulated, and the sample
+ * exchange is the shape of a real reply. A reviewer should be able to read
+ * this page and know what to go and verify.
  *
- * **The trace stays.** Each reply can expand to show what the agent actually
- * did - the plan it wrote and every tool it called, with latencies. Most chat
- * interfaces hide this; showing it turns the documentation's claims into
- * something a reviewer can verify in the UI.
- *
- * **The service toggles are real.** The selection travels with every message,
- * and a switched-off service's tool is removed from the agent's toolbox on
- * the backend - the toggle is a guarantee, not a display filter.
- *
- * **Emoji appear only in the agent's own words.** Interface icons are SVG, so
- * they inherit colour and stroke weight and render identically everywhere.
- * Emoji inside a reply are content the model wrote, which is a different
- * thing from chrome.
+ * Signed-in visitors get "Open the planner"; everyone else gets "Start
+ * planning", which routes through sign-in. The check is client-side because
+ * the session lives in the browser, and the button is rendered in a neutral
+ * state until it resolves so it never flashes the wrong label.
  */
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 
-import { AppShell } from "@/components/AppShell";
-import { ItineraryView } from "@/components/Itinerary";
-import { AuthGate } from "@/components/AuthGate";
 import {
   IconBed,
-  IconCalendar,
+  IconBrain,
+  IconChat,
   IconChevron,
   IconClock,
   IconCompass,
   IconFork,
-  IconInfo,
   IconPin,
   IconPlane,
-  IconSend,
   IconSparkle,
   IconSun,
   IconTicket,
-  IconUsers,
-  IconWallet,
-  SERVICE_ICONS,
 } from "@/components/icons";
-import {
-  Badge,
-  Button,
-  Card,
-  ErrorBanner,
-  FormattedText,
-  PlaceImage,
-} from "@/components/ui";
-import {
-  ApiError,
-  api,
-  type ChatResponse,
-  type FocusService,
-  type TripState,
-} from "@/lib/api";
+import { Badge, Card } from "@/components/ui";
+import { getSupabase } from "@/lib/supabase";
 
-interface Turn {
-  role: "user" | "assistant";
-  content: string;
-  meta?: ChatResponse;
-}
-
-const SERVICES: { id: FocusService; label: string }[] = [
-  { id: "flights", label: "Flights" },
-  { id: "attractions", label: "Attractions" },
-  { id: "stays", label: "Stays" },
-  { id: "restaurants", label: "Restaurants" },
-];
-
-/**
- * The service cards on the welcome screen. Each fills the composer with a
- * scoped opener the user finishes with a destination - discovery by doing
- * rather than a features page nobody reads. Tints echo the reference design.
- */
-const CAPABILITIES = [
+const GEARS = [
   {
+    name: "Clarify",
+    when: "You haven't said where",
+    example: "\"Somewhere warm in December\"",
+    result: "One friendly question — never a form.",
+    tint: "from-[var(--color-gold-soft)] to-transparent",
+    accent: "text-[var(--color-gold)]",
+    icon: IconChat,
+  },
+  {
+    name: "Advise",
+    when: "A place, but not yet a trip",
+    example: "\"I want to go to Kerala\"",
+    result: "Grounded options and at most two questions — not a surprise itinerary.",
+    tint: "from-[var(--color-grape-soft)] to-transparent",
+    accent: "text-[var(--color-grape)]",
+    icon: IconSparkle,
+  },
+  {
+    name: "Plan",
+    when: "Enough to build on",
+    example: "\"5 days from 2 October, from Delhi\"",
+    result: "The full day-by-day plan, with photos and a map.",
+    tint: "from-[var(--color-brand-soft)] to-transparent",
+    accent: "text-[var(--color-brand-strong)]",
     icon: IconCompass,
-    title: "Build an itinerary",
-    hint: "Tell it a place — it suggests, asks, then plans",
-    prompt: "I want to go to ",
-    tint: "bg-[var(--color-gold-soft)] text-[var(--color-gold)]",
-    span: "sm:col-span-2 sm:row-span-2",
-    art: "kyoto travel",
-  },
-  {
-    icon: IconPlane,
-    title: "Find flights",
-    hint: "Compare routes and fares",
-    prompt: "Find me flights to ",
-    tint: "bg-[var(--color-sky-soft)] text-[var(--color-sky)]",
-    span: "",
-    art: "airplane sky",
-  },
-  {
-    icon: IconBed,
-    title: "Find a stay",
-    hint: "Places that fit your budget",
-    prompt: "Find me a place to stay in ",
-    tint: "bg-[var(--color-grape-soft)] text-[var(--color-grape)]",
-    span: "",
-    art: "hotel room",
-  },
-  {
-    icon: IconTicket,
-    title: "See attractions",
-    hint: "What's genuinely worth seeing",
-    prompt: "What are the best things to see in ",
-    tint: "bg-[var(--color-rose-soft)] text-[var(--color-rose)]",
-    span: "",
-    art: "landmark monument",
-  },
-  {
-    icon: IconFork,
-    title: "Eat well",
-    hint: "Food that matches your needs",
-    prompt: "Where should I eat in ",
-    tint: "bg-[var(--color-mint-soft)] text-[var(--color-mint)]",
-    span: "",
-    art: "restaurant food",
   },
 ] as const;
 
-const EXAMPLES = [
-  "I want to go to Kerala",
-  "Plan me 2 relaxed days in Kyoto. I'm vegetarian.",
-  "Will I need an umbrella in Singapore next week?",
-  "京都で2日間の旅程を立ててください",
-];
+const TOOLS = [
+  { icon: IconCompass, label: "Travel guides", source: "Wikivoyage", note: "Multi-hop research" },
+  { icon: IconPin, label: "Real places", source: "OpenStreetMap", note: "Filterable by diet & access" },
+  { icon: IconSun, label: "Weather", source: "Open-Meteo", note: "Real forecasts" },
+  { icon: IconTicket, label: "Live web", source: "Tavily", note: "Events and closures" },
+  { icon: IconPlane, label: "Flights", source: "Simulated", note: "Clearly labelled" },
+  { icon: IconBed, label: "Stays", source: "Simulated", note: "Clearly labelled" },
+] as const;
 
-export default function ChatPage() {
-  return (
-    <AuthGate>
-      {(session) => (
-        // useSearchParams needs a Suspense boundary during prerendering.
-        <Suspense fallback={<div className="min-h-dvh" />}>
-          <ChatRoute session={session} />
-        </Suspense>
-      )}
-    </AuthGate>
-  );
-}
-
-function ChatRoute({ session }: { session: { email: string | null; isAdmin: boolean } }) {
-  const [historyToken, setHistoryToken] = useState(0);
-  return (
-    <AppShell session={session} historyToken={historyToken}>
-      <Chat onConversationSaved={() => setHistoryToken((n) => n + 1)} />
-    </AppShell>
-  );
-}
-
-function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const urlSession = searchParams.get("session");
-
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [input, setInput] = useState("");
-  const [sessionId, setSessionId] = useState<string | undefined>();
-  const [busy, setBusy] = useState(false);
-  const [loadingTranscript, setLoadingTranscript] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [retryMessage, setRetryMessage] = useState<string | null>(null);
-  const [focus, setFocus] = useState<FocusService[]>(SERVICES.map((s) => s.id));
-  const [trip, setTrip] = useState<TripState>({});
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
-
-  // Load (or clear) the transcript whenever the URL's session changes.
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      if (!urlSession) {
-        setTurns([]);
-        setSessionId(undefined);
-        setTrip({});
-        return;
-      }
-      setLoadingTranscript(true);
-      try {
-        const detail = await api.getSession(urlSession);
-        if (cancelled) return;
-        setSessionId(detail.session.id);
-        setTurns(
-          detail.messages
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-        );
-        setTrip(detail.session.destination ? { destination: detail.session.destination } : {});
-      } catch {
-        if (!cancelled) setError("That conversation could not be opened.");
-      } finally {
-        if (!cancelled) setLoadingTranscript(false);
-      }
-    }
-
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [urlSession]);
+export default function LandingPage() {
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [turns, busy]);
+    getSupabase()
+      .auth.getSession()
+      .then(({ data }) => setSignedIn(Boolean(data.session)))
+      .catch(() => setSignedIn(false));
+  }, []);
 
-  function toggleService(id: FocusService) {
-    setFocus((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      // Canonical order, so the array sent to the API is stable regardless of
-      // the order the user clicked in.
-      return SERVICES.map((s) => s.id).filter((s) => next.has(s));
-    });
-  }
-
-  function insertPrompt(prompt: string) {
-    setInput((current) => (current ? `${current.trimEnd()} ${prompt}` : prompt));
-    inputRef.current?.focus();
-  }
-
-  const send = useCallback(
-    async (message: string) => {
-      const trimmed = message.trim();
-      if (!trimmed || busy) return;
-
-      setError(null);
-      setRetryMessage(null);
-      setInput("");
-      setTurns((previous) => [...previous, { role: "user", content: trimmed }]);
-      setBusy(true);
-
-      try {
-        const reply = await api.chat(trimmed, sessionId, focus);
-        setSessionId(reply.session_id);
-        setTrip(reply.trip_state ?? {});
-        setTurns((previous) => [
-          ...previous,
-          { role: "assistant", content: reply.response, meta: reply },
-        ]);
-        onConversationSaved();
-        // Put the (possibly brand-new) conversation in the URL so a reload or
-        // a click in the sidebar lands back on it.
-        if (reply.session_id !== urlSession) {
-          router.replace(`/?session=${reply.session_id}`, { scroll: false });
-        }
-      } catch (caught) {
-        const text =
-          caught instanceof ApiError
-            ? caught.message
-            : "Could not reach the planner. Please try again.";
-        setError(text);
-        // Kept separately from the input box so one-click Retry can resend it
-        // verbatim even if the user has started typing something else.
-        setRetryMessage(trimmed);
-        setInput(trimmed);
-        setTurns((previous) => previous.slice(0, -1));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [busy, focus, sessionId, urlSession, router, onConversationSaved],
-  );
-
-  const empty = turns.length === 0 && !loadingTranscript;
+  const cta = signedIn ? "Open the planner" : "Start planning";
+  const href = signedIn ? "/chat" : "/login";
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 sm:px-6">
-      <div className="flex-1 space-y-5 py-6">
-        {loadingTranscript && (
-          <div className="space-y-3">
-            {[0, 1].map((n) => (
-              <div key={n} className="skeleton h-20 rounded-2xl" />
-            ))}
-          </div>
-        )}
-
-        {empty && <Welcome onPick={(t) => void send(t)} onPrompt={insertPrompt} />}
-
-        {turns.map((turn, index) => (
-          <Message key={index} turn={turn} onPickOption={(t) => void send(t)} />
-        ))}
-
-        {busy && <Thinking />}
-        {error && (
-          <ErrorBanner
-            message={error}
-            onRetry={retryMessage ? () => void send(retryMessage) : undefined}
-          />
-        )}
-        <div ref={endRef} />
-      </div>
-
-      <div className="sticky bottom-0 space-y-2.5 bg-gradient-to-t from-[var(--color-paper)] via-[var(--color-paper)] to-transparent pb-5 pt-3">
-        <TripBar trip={trip} />
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          {SERVICES.map((service) => {
-            const enabled = focus.includes(service.id);
-            const Glyph = SERVICE_ICONS[service.id];
-            return (
-              <button
-                key={service.id}
-                type="button"
-                onClick={() => toggleService(service.id)}
-                aria-pressed={enabled}
-                title={
-                  enabled
-                    ? `${service.label} is on — the agent may use it`
-                    : `${service.label} is off — its tool is withheld from the agent`
-                }
-                className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors duration-200 ${
-                  enabled
-                    ? "border-[var(--color-brand)] bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand-strong)]"
-                    : "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-faint)]"
-                }`}
-              >
-                <Glyph size="1em" />
-                {service.label}
-                {/* Not colour alone: an off toggle also loses its check mark. */}
-                {enabled && <span aria-hidden>✓</span>}
-              </button>
-            );
-          })}
-          <span className="ml-auto hidden text-[11px] text-[var(--color-ink-faint)] sm:inline">
-            switched-off services are hidden from the agent
+    <div className="mx-auto w-full max-w-5xl px-4 pb-20 sm:px-6">
+      <header className="flex items-center justify-between py-5">
+        <span className="flex items-center gap-2.5">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--color-brand)] text-white">
+            <IconCompass />
           </span>
-        </div>
-
-        <TripDetailsPicker onInsert={insertPrompt} />
-
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void send(input);
-          }}
-          className="flex items-end gap-2 rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] p-2 shadow-[0_10px_30px_-24px_rgb(44_31_43_/_0.5)] focus-within:border-[var(--color-brand)]"
+          <span className="font-display text-[15px] font-semibold tracking-tight">
+            Trip Planner
+          </span>
+        </span>
+        <Link
+          href={href}
+          className="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-4 text-sm font-medium transition-colors duration-200 hover:border-[var(--color-brand)]"
         >
-          <label htmlFor="composer" className="sr-only">
-            Your message
-          </label>
-          <textarea
-            id="composer"
-            ref={inputRef}
-            value={input}
-            rows={1}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              // Enter sends, Shift+Enter makes a new line - the convention
-              // people already expect from every other chat interface.
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void send(input);
-              }
-            }}
-            placeholder="Where would you like to go?"
-            disabled={busy}
-            className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-2 py-2.5 text-sm outline-none placeholder:text-[var(--color-ink-faint)] disabled:opacity-60"
-          />
-          <Button type="submit" disabled={busy || !input.trim()} aria-label="Send message">
-            <IconSend size="1.1em" />
-            <span className="hidden sm:inline">Send</span>
-          </Button>
-        </form>
+          {signedIn === null ? "Continue" : cta}
+        </Link>
+      </header>
 
-        <p className="text-center text-[11px] text-[var(--color-ink-faint)]">
-          Flight and hotel prices are simulated. Everything else is real data.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function Welcome({
-  onPick,
-  onPrompt,
-}: {
-  onPick: (text: string) => void;
-  onPrompt: (prompt: string) => void;
-}) {
-  return (
-    <div className="rise-in py-4">
-      <div className="flex items-center gap-2">
+      {/* -- Hero ---------------------------------------------------------- */}
+      <section className="rise-in pt-8 text-center sm:pt-14">
         <Badge tone="accent">
           <IconSparkle size="0.9em" />
-          AI trip partner
+          Plans around you, not at you
         </Badge>
-      </div>
 
-      <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-        Begin your next{" "}
-        <span className="bg-gradient-to-r from-[var(--color-brand)] to-[var(--color-grape)] bg-clip-text text-transparent">
-          adventure
-        </span>
-      </h1>
-      <p className="mt-2 max-w-xl text-sm leading-relaxed text-[var(--color-ink-soft)]">
-        Name a place and I&apos;ll suggest, ask the right questions, then build the
-        plan — or jump straight to one specific thing.
-      </p>
-
-      <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-brand-soft)]/60 px-4 py-3 text-sm">
-        <span className="mt-0.5 shrink-0 text-[var(--color-brand-strong)]">
-          <IconInfo size="1.1em" />
-        </span>
-        <p className="leading-relaxed">
-          <strong className="font-semibold">What helps most:</strong> where you&apos;re
-          going, how many days, roughly when, who&apos;s coming, and any must-haves
-          (diet, budget, pace). Give what you know — I&apos;ll ask about anything
-          important that&apos;s missing.
-        </p>
-      </div>
-
-      <div className="mt-5 grid auto-rows-[minmax(0,1fr)] gap-3 sm:grid-cols-4">
-        {CAPABILITIES.map((capability) => {
-          const Glyph = capability.icon;
-          const big = capability.span !== "";
-          return (
-            <button
-              key={capability.title}
-              type="button"
-              onClick={() => onPrompt(capability.prompt)}
-              className={`group relative overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] p-4 text-left transition-[border-color,transform] duration-200 hover:border-[var(--color-brand)] hover:-translate-y-0.5 ${capability.span}`}
-            >
-              <span
-                className={`grid h-10 w-10 place-items-center rounded-xl ${capability.tint}`}
-              >
-                <Glyph />
-              </span>
-              <span className="mt-3 block font-display text-sm font-semibold">
-                {capability.title}
-              </span>
-              <span className="mt-0.5 block text-xs leading-relaxed text-[var(--color-ink-soft)]">
-                {capability.hint}
-              </span>
-              {big && (
-                <PlaceImage
-                  name={capability.art}
-                  width={420}
-                  height={260}
-                  className="pointer-events-none mt-4 h-28 w-full rounded-xl opacity-90 transition-transform duration-300 group-hover:scale-[1.02] sm:h-36"
-                />
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      <p className="mt-6 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
-        Or try one of these
-      </p>
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        {EXAMPLES.map((example) => (
-          <button
-            key={example}
-            type="button"
-            onClick={() => onPick(example)}
-            className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] px-3.5 py-2.5 text-left text-sm transition-colors duration-200 hover:border-[var(--color-brand)]"
-          >
-            <span>{example}</span>
-            <span className="shrink-0 text-[var(--color-ink-faint)]">
-              <IconChevron size="0.95em" />
-            </span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The slot ledger, rendered. Empty slots simply do not appear, so the bar
- * grows as the conversation fills the trip in - a progress indicator that is
- * also an honesty check on what the agent claims to know.
- */
-function TripBar({ trip }: { trip: TripState }) {
-  const chips: { icon: React.ReactNode; text: string }[] = [];
-  if (trip.destination) chips.push({ icon: <IconPin size="0.95em" />, text: trip.destination });
-  if (trip.duration_days)
-    chips.push({ icon: <IconCalendar size="0.95em" />, text: `${trip.duration_days} days` });
-  if (trip.start_date)
-    chips.push({
-      icon: <IconClock size="0.95em" />,
-      text: `${trip.start_date}${trip.end_date ? ` → ${trip.end_date}` : ""}`,
-    });
-  else if (trip.travel_window)
-    chips.push({ icon: <IconClock size="0.95em" />, text: trip.travel_window });
-  if (trip.origin) chips.push({ icon: <IconPlane size="0.95em" />, text: `from ${trip.origin}` });
-  if (trip.party) chips.push({ icon: <IconUsers size="0.95em" />, text: trip.party });
-  if (trip.budget_tier)
-    chips.push({ icon: <IconWallet size="0.95em" />, text: trip.budget_tier });
-  if (trip.priorities?.length)
-    chips.push({ icon: <IconSparkle size="0.95em" />, text: trip.priorities.join(", ") });
-
-  if (chips.length === 0) return null;
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)]/80 px-3 py-2 text-xs backdrop-blur">
-      {trip.destination && (
-        <PlaceImage
-          name={trip.destination}
-          width={48}
-          height={48}
-          className="h-6 w-6 rounded-full"
-        />
-      )}
-      <span className="font-medium text-[var(--color-ink-soft)]">Your trip</span>
-      {chips.map((chip) => (
-        <span
-          key={chip.text}
-          className="inline-flex items-center gap-1 rounded-full bg-[var(--color-brand-soft)] px-2.5 py-1 text-[var(--color-brand-strong)]"
-        >
-          {chip.icon}
-          {chip.text}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function Message({
-  turn,
-  onPickOption,
-}: {
-  turn: Turn;
-  onPickOption: (text: string) => void;
-}) {
-  const [showTrace, setShowTrace] = useState(false);
-
-  if (turn.role === "user") {
-    return (
-      <div className="rise-in flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[var(--color-brand-strong)] px-4 py-2.5 text-sm text-white">
-          {turn.content}
-        </div>
-      </div>
-    );
-  }
-
-  const meta = turn.meta;
-
-  return (
-    <div className="rise-in flex justify-start">
-      <div className="w-full max-w-[94%]">
-        {meta?.itinerary ? (
-          <ItineraryView itinerary={meta.itinerary} />
-        ) : (
-          <Card className="px-4 py-3.5">
-            <FormattedText text={turn.content} />
-          </Card>
-        )}
-
-        {meta && meta.mode === "advise" && meta.suggested_options.length > 0 && (
-          <OptionChips options={meta.suggested_options} onPick={onPickOption} />
-        )}
-
-        {meta && meta.suggested_actions.length > 0 && (
-          <ActionChips actions={meta.suggested_actions} onPick={onPickOption} />
-        )}
-
-        {meta && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            {meta.mode === "advise" && (
-              <span title="The agent is gathering what it needs before building the full plan. Say 'just plan it' to skip ahead.">
-                <Badge tone="grape">shaping the trip</Badge>
-              </span>
-            )}
-            {meta.needs_clarification && <Badge tone="warn">asked a question</Badge>}
-            {meta.status === "partial" && <Badge tone="warn">partial answer</Badge>}
-            {meta.destination && <Badge tone="accent">{meta.destination}</Badge>}
-            {meta.detected_language !== "en" && (
-              <Badge>{meta.detected_language.toUpperCase()}</Badge>
-            )}
-            <span className="text-[var(--color-ink-faint)]">
-              {(meta.latency_ms / 1000).toFixed(1)}s
-            </span>
-            {(meta.plan.length > 0 || meta.tool_calls.length > 0) && (
-              <button
-                type="button"
-                onClick={() => setShowTrace((value) => !value)}
-                aria-expanded={showTrace}
-                className="font-medium text-[var(--color-brand-strong)] underline underline-offset-2"
-              >
-                {showTrace ? "Hide" : "Show"} what it did
-              </button>
-            )}
-          </div>
-        )}
-
-        {meta && showTrace && <Trace meta={meta} />}
-      </div>
-    </div>
-  );
-}
-
-/**
- * "Want me to also…" offers under a reply.
- *
- * A live five-day Geneva plan never once mentioned that the agent could also
- * find flights, a hotel or a restaurant - all three tools were available and
- * the traveller had no way to know. These are that missing prompt.
- *
- * The list is built on the server from what is known and what has not run
- * yet, so it can never offer a service the traveller switched off or one it
- * has just delivered.
- */
-function ActionChips({
-  actions,
-  onPick,
-}: {
-  actions: { label: string; message: string }[];
-  onPick: (message: string) => void;
-}) {
-  return (
-    <div className="mt-2.5 flex flex-wrap items-center gap-2">
-      <span className="text-[11px] text-[var(--color-ink-faint)]">Want me to also</span>
-      {actions.map((action) => (
-        <button
-          key={action.label}
-          type="button"
-          onClick={() => onPick(action.message)}
-          className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-3 text-xs font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
-        >
-          {action.label}
-          <IconChevron size="0.85em" />
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Clickable destination options from the advisor's own retrieval - real place
- * names taken from the guide corpus, not parsed out of the prose. Clicking
- * one sends it as the next message, so picking a suggestion is a tap instead
- * of retyping a name out of a paragraph.
- */
-function OptionChips({
-  options,
-  onPick,
-}: {
-  options: string[];
-  onPick: (text: string) => void;
-}) {
-  return (
-    <div className="mt-2.5 flex flex-wrap gap-2">
-      {options.map((option) => (
-        <button
-          key={option}
-          type="button"
-          onClick={() => onPick(`Let's do ${option}`)}
-          className="group inline-flex min-h-11 items-center gap-2 overflow-hidden rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] py-1 pl-1 pr-3.5 text-xs font-medium transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)]"
-        >
-          <PlaceImage name={option} width={64} height={64} className="h-8 w-8 rounded-full" />
-          {option}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Trace({ meta }: { meta: ChatResponse }) {
-  return (
-    <Card className="mt-2 space-y-4 p-4 text-xs">
-      {meta.plan.length > 0 && (
-        <section>
-          <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
-            Plan
-          </h4>
-          <ol className="space-y-1.5">
-            {meta.plan.map((step, index) => (
-              <li key={index} className="flex gap-2">
-                <span className="tabular-nums text-[var(--color-ink-faint)]">{index + 1}.</span>
-                <span className="flex-1">{step.description}</span>
-                <Badge>{step.kind}</Badge>
-              </li>
-            ))}
-          </ol>
-          {meta.replan_count > 0 && (
-            <p className="mt-2 text-[var(--color-warn)]">
-              Plan was revised {meta.replan_count}{" "}
-              {meta.replan_count === 1 ? "time" : "times"} during the run.
-            </p>
-          )}
-        </section>
-      )}
-
-      {meta.tool_calls.length > 0 && (
-        <section>
-          <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
-            Tools used ({meta.tool_calls.length})
-          </h4>
-          <ul className="space-y-1.5">
-            {meta.tool_calls.map((call, index) => (
-              <li key={index} className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2">
-                  <code className="font-mono">{call.tool}</code>
-                  {call.status === "degraded" && <Badge tone="warn">source unavailable</Badge>}
-                  {call.status === "invalid" && (
-                    <span title="The model's first arguments didn't validate. The tool told it exactly what was wrong, and it corrected itself on the next call — the schema working as intended, not a failure.">
-                      <Badge>self-corrected</Badge>
-                    </span>
-                  )}
-                </span>
-                <span className="tabular-nums text-[var(--color-ink-faint)]">
-                  {call.source} · {call.latency_ms}ms
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <p className="border-t border-[var(--color-line)] pt-3 text-[var(--color-ink-faint)]">
-        Run <code className="font-mono">{meta.run_id.slice(0, 8)}</code> ·{" "}
-        {meta.steps_executed} steps · {meta.total_tokens.toLocaleString()} tokens
-      </p>
-    </Card>
-  );
-}
-
-/**
- * A clickable way to add dates and trip length without typing them out.
- * Deliberately simple - native date inputs and a stepper, not a bespoke
- * calendar - because the ask was "make it clickable", not "build a date
- * picker" for something used a handful of times per conversation.
- */
-function TripDetailsPicker({ onInsert }: { onInsert: (text: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [days, setDays] = useState(0);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-
-  const canInsert = days > 0 || startDate !== "";
-
-  function insert() {
-    const parts: string[] = [];
-    if (days > 0) parts.push(`${days} day${days === 1 ? "" : "s"}`);
-    if (startDate && endDate) parts.push(`from ${startDate} to ${endDate}`);
-    else if (startDate) parts.push(`starting ${startDate}`);
-    if (parts.length > 0) onInsert(parts.join(", "));
-    setOpen(false);
-    setDays(0);
-    setStartDate("");
-    setEndDate("");
-  }
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex min-h-9 items-center gap-1.5 text-xs font-medium text-[var(--color-brand-strong)] underline underline-offset-2"
-      >
-        <IconCalendar size="1em" />
-        Add dates or trip length
-      </button>
-    );
-  }
-
-  return (
-    <div className="flex flex-wrap items-end gap-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] p-3 text-xs">
-      <div>
-        <span className="mb-1 block text-[var(--color-ink-soft)]">Days</span>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setDays((v) => Math.max(0, v - 1))}
-            className="h-9 w-9 rounded-lg border border-[var(--color-line-strong)] font-medium"
-            aria-label="Fewer days"
-          >
-            −
-          </button>
-          <span className="w-7 text-center tabular-nums" aria-live="polite">
-            {days}
+        <h1 className="mx-auto mt-4 max-w-3xl font-display text-4xl font-semibold leading-[1.1] tracking-tight sm:text-6xl">
+          Begin your next{" "}
+          <span className="bg-gradient-to-r from-[var(--color-brand)] via-[var(--color-rose)] to-[var(--color-grape)] bg-clip-text text-transparent">
+            adventure
           </span>
-          <button
-            type="button"
-            onClick={() => setDays((v) => Math.min(90, v + 1))}
-            className="h-9 w-9 rounded-lg border border-[var(--color-line-strong)] font-medium"
-            aria-label="More days"
+        </h1>
+
+        <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-[var(--color-ink-soft)]">
+          Tell it a place. It researches real travel guides, asks the questions
+          that actually change the plan, and remembers what matters to you — so
+          the next trip starts where the last one left off.
+        </p>
+
+        <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href={href}
+            className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-[var(--color-brand-strong)] px-6 text-sm font-semibold text-white shadow-[0_12px_30px_-14px_rgb(194_65_12_/_0.8)] transition-transform duration-200 hover:-translate-y-0.5"
           >
-            +
-          </button>
+            {signedIn === null ? "Continue" : cta}
+            <IconChevron size="1em" />
+          </Link>
+          <a
+            href="#how"
+            className="inline-flex min-h-12 items-center gap-2 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-5 text-sm font-medium transition-colors duration-200 hover:border-[var(--color-brand)]"
+          >
+            See how it works
+          </a>
         </div>
-      </div>
-      <div>
-        <label className="mb-1 block text-[var(--color-ink-soft)]" htmlFor="trip-start">
-          Start date
-        </label>
-        <input
-          id="trip-start"
-          type="date"
-          value={startDate}
-          onChange={(e) => setStartDate(e.target.value)}
-          className="min-h-9 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-2"
-        />
-      </div>
-      <div>
-        <label className="mb-1 block text-[var(--color-ink-soft)]" htmlFor="trip-end">
-          End date
-        </label>
-        <input
-          id="trip-end"
-          type="date"
-          value={endDate}
-          min={startDate || undefined}
-          onChange={(e) => setEndDate(e.target.value)}
-          className="min-h-9 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-2"
-        />
-      </div>
-      <Button variant="secondary" onClick={insert} disabled={!canInsert}>
-        Add to message
-      </Button>
-      <button
-        type="button"
-        onClick={() => setOpen(false)}
-        className="min-h-9 px-1 text-[var(--color-ink-soft)] underline underline-offset-2"
-      >
-        Cancel
-      </button>
-    </div>
-  );
-}
 
-function Thinking() {
-  const [stage, setStage] = useState(0);
-  const stages = [
-    { icon: <IconCompass size="1em" />, text: "Reading your request" },
-    { icon: <IconSparkle size="1em" />, text: "Researching the destination" },
-    { icon: <IconSun size="1em" />, text: "Checking details" },
-    { icon: <IconCalendar size="1em" />, text: "Writing it up" },
-  ];
+        <p className="mt-3 text-xs text-[var(--color-ink-faint)]">
+          Free to try · No card · Your data is yours to delete
+        </p>
+      </section>
 
-  // Advances on a timer rather than from real progress events: the backend
-  // does not stream stage updates, so this is an honest approximation of a
-  // sequence that genuinely happens in that order, not a fake progress bar
-  // claiming to know how far along the run is.
-  useEffect(() => {
-    const id = setInterval(() => setStage((s) => Math.min(s + 1, stages.length - 1)), 7000);
-    return () => clearInterval(id);
-  }, [stages.length]);
+      {/* -- A real exchange ------------------------------------------------ */}
+      <section className="mt-14 sm:mt-20">
+        <Card className="overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-[var(--color-line)] px-4 py-2.5">
+            <span className="flex gap-1.5" aria-hidden>
+              {["#f87171", "#fbbf24", "#34d399"].map((color) => (
+                <span
+                  key={color}
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ background: color }}
+                />
+              ))}
+            </span>
+            <span className="text-[11px] text-[var(--color-ink-faint)]">
+              A real conversation
+            </span>
+          </div>
 
-  return (
-    <div className="rise-in flex items-center gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3">
-      <span className="flex gap-1" aria-hidden>
-        {[0, 1, 2].map((index) => (
-          <span
-            key={index}
-            className="typing-dot h-1.5 w-1.5 rounded-full bg-[var(--color-brand)]"
-            style={{ animationDelay: `${index * 0.16}s` }}
-          />
-        ))}
-      </span>
-      <span className="flex items-center gap-1.5 text-sm text-[var(--color-ink-soft)]">
-        <span className="text-[var(--color-brand)]">{stages[stage].icon}</span>
-        {stages[stage].text}…
-      </span>
-      <span className="ml-auto text-[11px] text-[var(--color-ink-faint)]">
-        quick answers take seconds, full plans up to a minute
-      </span>
+          <div className="space-y-3 p-4 sm:p-6">
+            <div className="flex justify-end">
+              <span className="rounded-2xl rounded-br-md bg-[var(--color-brand-strong)] px-4 py-2 text-sm text-white">
+                I want to go to Kerala
+              </span>
+            </div>
+
+            <div className="max-w-[92%] rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 py-3 text-sm leading-relaxed">
+              <p>Kerala splits into a few very different trips 🌴</p>
+              <ul className="mt-2 space-y-1 text-[var(--color-ink-soft)]">
+                <li>
+                  <strong className="text-[var(--color-ink)]">Backwaters</strong> — Alappuzha,
+                  houseboats and canals
+                </li>
+                <li>
+                  <strong className="text-[var(--color-ink)]">Tea hills</strong> — Munnar,
+                  plantations and cool air
+                </li>
+                <li>
+                  <strong className="text-[var(--color-ink)]">Culture</strong> — Fort Kochi,
+                  colonial lanes and cafés
+                </li>
+              </ul>
+              <p className="mt-2">
+                How many days do you have, and which of those matters most?
+              </p>
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                {["Alappuzha", "Munnar", "Fort Kochi"].map((option) => (
+                  <span
+                    key={option}
+                    className="rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-2.5 py-1 text-[11px] font-medium"
+                  >
+                    {option}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <p className="pt-1 text-center text-[11px] text-[var(--color-ink-faint)]">
+              Those places come from real guide articles — not from the model&apos;s memory.
+            </p>
+          </div>
+        </Card>
+      </section>
+
+      {/* -- Three gears ---------------------------------------------------- */}
+      <section id="how" className="mt-16 scroll-mt-8 sm:mt-24">
+        <h2 className="text-center font-display text-2xl font-semibold tracking-tight sm:text-3xl">
+          It works out how much to ask
+        </h2>
+        <p className="mx-auto mt-2 max-w-xl text-center text-sm text-[var(--color-ink-soft)]">
+          Most assistants either interrogate you or guess. This one picks a gear
+          from what it already knows — and the rule is plain code, not a mood.
+        </p>
+
+        <div className="mt-8 grid gap-3 md:grid-cols-3">
+          {GEARS.map((gear, index) => {
+            const Glyph = gear.icon;
+            return (
+              <Card
+                key={gear.name}
+                className={`relative overflow-hidden bg-gradient-to-b p-5 ${gear.tint}`}
+              >
+                <span className="absolute right-4 top-4 font-display text-4xl font-bold text-[var(--color-ink)]/[0.06]">
+                  {index + 1}
+                </span>
+                <span className={`inline-flex items-center gap-1.5 ${gear.accent}`}>
+                  <Glyph size="1.1em" />
+                  <span className="font-display text-sm font-semibold">{gear.name}</span>
+                </span>
+                <p className="mt-2 text-xs font-medium text-[var(--color-ink-soft)]">
+                  {gear.when}
+                </p>
+                <p className="mt-2.5 rounded-lg bg-[var(--color-surface)]/70 px-3 py-2 text-xs italic">
+                  {gear.example}
+                </p>
+                <p className="mt-2.5 text-xs leading-relaxed">{gear.result}</p>
+              </Card>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* -- What it can reach ---------------------------------------------- */}
+      <section className="mt-16 sm:mt-24">
+        <h2 className="text-center font-display text-2xl font-semibold tracking-tight sm:text-3xl">
+          Grounded in real sources
+        </h2>
+        <p className="mx-auto mt-2 max-w-xl text-center text-sm text-[var(--color-ink-soft)]">
+          The agent chooses which of these to use, per request. Nothing here is
+          keyword routing — and the two that are simulated say so.
+        </p>
+
+        <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {TOOLS.map((tool) => {
+            const Glyph = tool.icon;
+            const simulated = tool.source === "Simulated";
+            return (
+              <Card key={tool.label} className="flex items-start gap-3 p-4" interactive>
+                <span
+                  className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${
+                    simulated
+                      ? "bg-[var(--color-surface-2)] text-[var(--color-ink-faint)]"
+                      : "bg-[var(--color-brand-soft)] text-[var(--color-brand-strong)]"
+                  }`}
+                >
+                  <Glyph size="1.05em" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block font-display text-sm font-semibold">{tool.label}</span>
+                  <span className="mt-0.5 block text-xs text-[var(--color-ink-soft)]">
+                    {tool.note}
+                  </span>
+                  <span
+                    className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      simulated
+                        ? "bg-[var(--color-gold-soft)] text-[var(--color-gold)]"
+                        : "bg-[var(--color-mint-soft)] text-[var(--color-mint)]"
+                    }`}
+                  >
+                    {tool.source}
+                  </span>
+                </span>
+              </Card>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* -- Memory ---------------------------------------------------------- */}
+      <section className="mt-16 sm:mt-24">
+        <Card className="grid gap-6 p-6 sm:p-8 lg:grid-cols-2">
+          <div>
+            <span className="inline-flex items-center gap-1.5 text-[var(--color-grape)]">
+              <IconBrain size="1.1em" />
+              <span className="font-display text-sm font-semibold">It remembers you</span>
+            </span>
+            <h3 className="mt-2 font-display text-xl font-semibold tracking-tight sm:text-2xl">
+              Say it once
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-[var(--color-ink-soft)]">
+              Mention that you&apos;re vegetarian, travel on a budget or fly from
+              Delhi, and every future trip is planned around it — without you
+              repeating yourself. Hard requirements are passed to searches as
+              filters, not hints, so they can&apos;t quietly get dropped.
+            </p>
+            <p className="mt-3 text-xs text-[var(--color-ink-faint)]">
+              Everything stored is visible on one page, and deletable in a click.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {[
+              { text: "Traveller is vegetarian.", tag: "Must be honoured", tone: "good" },
+              { text: "Prefers quiet places over crowds.", tag: "Preference", tone: "neutral" },
+              { text: "Flies from Delhi.", tag: "About you", tone: "neutral" },
+            ].map((memory) => (
+              <div
+                key={memory.text}
+                className="flex items-center justify-between gap-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3.5 py-2.5"
+              >
+                <span className="text-sm">{memory.text}</span>
+                <Badge tone={memory.tone as "good" | "neutral"}>{memory.tag}</Badge>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </section>
+
+      {/* -- Show its work ---------------------------------------------------- */}
+      <section className="mt-16 sm:mt-24">
+        <div className="grid gap-3 sm:grid-cols-3">
+          {[
+            {
+              icon: IconClock,
+              title: "Shows its work",
+              body: "Every reply can expand to the plan it wrote and each tool it called, with timings.",
+            },
+            {
+              icon: IconPin,
+              title: "Puts it on a map",
+              body: "Stops are numbered and pinned, so you can see what's a walk and what's a drive.",
+            },
+            {
+              icon: IconFork,
+              title: "Offers the next step",
+              body: "Flights, a place to stay, somewhere to eat — offered when useful, never nagged.",
+            },
+          ].map((feature) => {
+            const Glyph = feature.icon;
+            return (
+              <Card key={feature.title} className="p-5">
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--color-sky-soft)] text-[var(--color-sky)]">
+                  <Glyph size="1.05em" />
+                </span>
+                <h3 className="mt-3 font-display text-sm font-semibold">{feature.title}</h3>
+                <p className="mt-1 text-xs leading-relaxed text-[var(--color-ink-soft)]">
+                  {feature.body}
+                </p>
+              </Card>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* -- Close ------------------------------------------------------------ */}
+      <section className="mt-16 text-center sm:mt-24">
+        <Card className="bg-gradient-to-br from-[var(--color-brand-soft)] via-[var(--color-rose-soft)]/60 to-[var(--color-grape-soft)] p-10">
+          <h2 className="font-display text-2xl font-semibold tracking-tight sm:text-3xl">
+            Where are you going?
+          </h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-[var(--color-ink-soft)]">
+            Name a place — it takes it from there.
+          </p>
+          <Link
+            href={href}
+            className="mt-6 inline-flex min-h-12 items-center gap-2 rounded-xl bg-[var(--color-brand-strong)] px-6 text-sm font-semibold text-white shadow-[0_12px_30px_-14px_rgb(194_65_12_/_0.8)] transition-transform duration-200 hover:-translate-y-0.5"
+          >
+            {signedIn === null ? "Continue" : cta}
+            <IconChevron size="1em" />
+          </Link>
+        </Card>
+
+        <p className="mt-8 text-xs text-[var(--color-ink-faint)]">
+          Flight and hotel prices are simulated and clearly labelled. Everything
+          else comes from live sources.
+        </p>
+      </section>
     </div>
   );
 }

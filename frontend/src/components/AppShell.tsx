@@ -42,7 +42,7 @@ import { ApiError, api, type SessionSummary } from "@/lib/api";
 import { signOut } from "@/lib/supabase";
 
 const NAV = [
-  { href: "/", label: "Chat", icon: IconChat },
+  { href: "/chat", label: "Chat", icon: IconChat },
   { href: "/dashboard", label: "Your travel", icon: IconChart },
   { href: "/memories", label: "What it remembers", icon: IconBrain },
 ] as const;
@@ -125,7 +125,7 @@ export function AppShell({
     try {
       await api.eraseMyData();
       await loadHistory();
-      router.push("/");
+      router.push("/chat");
       router.refresh();
     } catch (caught) {
       window.alert(
@@ -153,8 +153,8 @@ export function AppShell({
       </Link>
 
       <Link
-        href="/"
-        onClick={() => router.push("/")}
+        href="/chat"
+        onClick={() => router.push("/chat")}
         className="flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[var(--color-brand-strong)] px-4 text-sm font-medium text-white transition-opacity duration-200 hover:opacity-90"
       >
         <IconPlus size="1.1em" />
@@ -209,7 +209,7 @@ export function AppShell({
                       return (
                         <li key={item.id}>
                           <Link
-                            href={`/?session=${item.id}`}
+                            href={`/chat?session=${item.id}`}
                             aria-current={active ? "true" : undefined}
                             className={`flex min-h-11 flex-col justify-center rounded-lg px-3 py-1.5 text-xs transition-colors duration-200 ${
                               active

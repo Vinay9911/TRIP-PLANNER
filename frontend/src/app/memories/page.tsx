@@ -21,6 +21,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
 import { AuthGate } from "@/components/AuthGate";
+import { AddMemory, MemoryInterview } from "@/components/MemoryInterview";
 import { IconBrain, IconInfo, IconShield } from "@/components/icons";
 import {
   Badge,
@@ -65,6 +66,15 @@ function Memories({ session }: { session: { email: string | null; isAdmin: boole
     void load();
   }, [load]);
 
+  function absorb(memory: Memory) {
+    setMemories((previous) => {
+      // Consolidation may have reinforced an existing row rather than
+      // inserting, so replace by id when it is already present.
+      const without = previous.filter((item) => item.id !== memory.id);
+      return [memory, ...without];
+    });
+  }
+
   async function forget(id: string) {
     try {
       await api.deleteMemory(id);
@@ -88,6 +98,13 @@ function Memories({ session }: { session: { email: string | null; isAdmin: boole
         />
 
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
+
+        {!loading && (
+          <div className="mb-6 space-y-3">
+            <MemoryInterview onAdded={absorb} />
+            <AddMemory onAdded={absorb} />
+          </div>
+        )}
 
         {loading ? (
           <div className="space-y-2">
@@ -131,7 +148,7 @@ function Memories({ session }: { session: { email: string | null; isAdmin: boole
             }
             action={
               <Link
-                href="/"
+                href="/chat"
                 className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[var(--color-brand-strong)] px-4 text-sm font-medium text-white"
               >
                 <IconBrain size="1.1em" />

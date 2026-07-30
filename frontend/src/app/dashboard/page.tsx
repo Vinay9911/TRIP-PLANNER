@@ -132,7 +132,7 @@ function Dashboard({ session }: { session: { email: string | null; isAdmin: bool
             hint="Start a conversation and this page fills in — the places you've explored, how often you plan, and everything the agent remembers about how you like to travel."
             action={
               <Link
-                href="/"
+                href="/chat"
                 className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[var(--color-brand-strong)] px-4 text-sm font-medium text-white"
               >
                 <IconCompass size="1.1em" />
@@ -246,7 +246,7 @@ function Dashboard({ session }: { session: { email: string | null; isAdmin: bool
                   {recentDestinations.map((s) => (
                     <Link
                       key={s.id}
-                      href={`/?session=${s.id}`}
+                      href={`/chat?session=${s.id}`}
                       className="group overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)]"
                     >
                       <PlaceImage

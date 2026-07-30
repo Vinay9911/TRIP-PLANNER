@@ -16,7 +16,7 @@ and see the extracted facts with their confidence and reinforcement counts.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
@@ -25,6 +25,8 @@ from app.api.deps import CurrentUser, get_database, get_memory_service
 from app.core.errors import ConfigurationError, ResourceNotFoundError
 from app.core.logging import get_logger
 from app.db.session import Database
+from app.memory.consolidator import consolidate_candidate
+from app.memory.schemas import CandidateMemory, MemorySubject, MemoryType
 from app.schemas.chat import ErrorResponse, MemoryOut
 
 logger = get_logger(__name__)
@@ -93,6 +95,146 @@ async def list_my_memories(
         )
         for memory in memories
     ]
+
+
+class MemoryIn(BaseModel):
+    """A fact the traveller is telling the agent directly."""
+
+    content: str = Field(
+        min_length=3,
+        max_length=280,
+        description=(
+            "One durable fact about the traveller, in their own words - "
+            "'I'm vegetarian', 'I hate early flights'. Stored as written."
+        ),
+    )
+    memory_type: Literal["constraint", "preference", "identity", "experience"] = Field(
+        default="preference",
+        description=(
+            "constraint = a hard requirement that must never be traded off; "
+            "preference = a soft leaning; identity = a stable attribute; "
+            "experience = somewhere they have been."
+        ),
+    )
+    subject: str = Field(
+        default="other",
+        max_length=40,
+        description="diet, budget, pace, accessibility, home_base, interests, …",
+    )
+
+
+@router.post(
+    "/me/memories",
+    response_model=MemoryOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Tell it something about yourself",
+)
+async def add_my_memory(
+    payload: MemoryIn,
+    user: CurrentUser,
+    memory_service: Annotated[Any, Depends(get_memory_service)],
+) -> MemoryOut:
+    """Store a fact the traveller supplied directly.
+
+    Waiting for extraction to notice a preference is a poor first experience:
+    the gate correctly ignores most messages, so a new user can hold a whole
+    conversation and still see an empty profile. This lets them state
+    something outright.
+
+    It goes through the **same consolidation path** as an extracted fact
+    rather than straight into the table. That matters: a manual entry should
+    still reinforce an existing belief rather than duplicate it, and should
+    still supersede one it contradicts. The only difference is confidence -
+    a fact the traveller stated about themselves is not a guess, so it enters
+    at full confidence.
+
+    Args:
+        payload: The fact, its type and its subject.
+        user: The authenticated caller.
+        memory_service: Long-term memory access.
+
+    Returns:
+        The stored memory.
+
+    Raises:
+        ConfigurationError: If long-term memory is not configured.
+    """
+    if memory_service is None:
+        raise ConfigurationError("Long-term memory is not configured on this deployment.")
+
+    candidate = CandidateMemory(
+        memory_type=MemoryType(payload.memory_type),
+        subject=_coerce_subject(payload.subject),
+        content=payload.content.strip(),
+        # Stated by the person it is about, so there is nothing to be
+        # uncertain about in the way an extraction is uncertain.
+        confidence=1.0,
+    )
+
+    embedding = await memory_service.embeddings.embed_query(candidate.content)
+    outcome = await consolidate_candidate(
+        user.id,
+        candidate,
+        embedding,
+        memory_service.store,
+        source_lang="en",
+        extractor_model="user",
+        settings=memory_service.settings,
+    )
+
+    logger.info(
+        "memory.user_added",
+        user_id=user.id,
+        action=outcome.action.value,
+        subject=candidate.subject.value,
+    )
+
+    # Read back through the same listing the page uses, rather than returning
+    # the candidate: consolidation may have reinforced an existing memory
+    # instead of inserting, in which case the row that matters is the older
+    # one with a bumped mention count, not what was just submitted.
+    stored = next(
+        (
+            memory
+            for memory in await memory_service.store.list_for_user(user.id)
+            if memory.id == outcome.memory_id
+        ),
+        None,
+    )
+    if stored is None:
+        raise ResourceNotFoundError("The memory could not be stored.")
+
+    return MemoryOut(
+        id=stored.id,
+        memory_type=stored.memory_type.value,
+        subject=stored.subject,
+        content=stored.content,
+        confidence=stored.confidence,
+        mention_count=stored.mention_count,
+        status=stored.status.value,
+        source_lang=stored.source_lang,
+        first_seen_at=stored.first_seen_at,
+        last_seen_at=stored.last_seen_at,
+    )
+
+
+def _coerce_subject(value: str) -> MemorySubject:
+    """Map a client-supplied subject onto the closed vocabulary.
+
+    The subject set is deliberately closed so retrieval can filter on it; an
+    unrecognised value becomes OTHER rather than a 422, because a slightly
+    mis-tagged memory is still worth keeping.
+
+    Args:
+        value: The requested subject.
+
+    Returns:
+        A valid `MemorySubject`.
+    """
+    try:
+        return MemorySubject(value.strip().lower())
+    except ValueError:
+        return MemorySubject.OTHER
 
 
 @router.delete(
