@@ -238,6 +238,15 @@ class MessageOut(BaseModel):
     content: str
     language: str | None = None
     created_at: datetime | None = None
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "For an assistant message, what is needed to draw it again: the "
+            "itinerary, the advisory options and their coordinates. Reopening "
+            "a conversation used to return only the text, so the map, the "
+            "photographs and the clickable options vanished on reload."
+        ),
+    )
 
 
 class SessionDetail(BaseModel):

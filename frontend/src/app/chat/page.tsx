@@ -65,6 +65,7 @@ import {
   type ChatResponse,
   type FocusService,
   type ProgressEvent,
+  type StoredMessage,
   type TripState,
 } from "@/lib/api";
 
@@ -154,6 +155,54 @@ export default function ChatPage() {
   );
 }
 
+/**
+ * Rebuild a reply's renderable payload from what was stored with it.
+ *
+ * A conversation reopened from history used to be plain text: the itinerary,
+ * the map, the photographs and the clickable options all lived on the live
+ * API response and nothing but the string was persisted. The reply the
+ * traveller saw yesterday came back today as a wall of prose.
+ *
+ * Only the fields that drive rendering are reconstructed. The trace - the
+ * plan, the tool calls, the timings - belongs to the run record and is not
+ * duplicated onto the message, so "Show what it did" is offered on live turns
+ * only. That is an honest limit rather than a gap: those numbers describe an
+ * execution, and a reopened transcript is not one.
+ *
+ * Returns undefined for anything with no stored payload - user messages, and
+ * assistant messages written before this was persisted - which the renderer
+ * already handles as "text only".
+ */
+function rehydrate(message: StoredMessage): ChatResponse | undefined {
+  const stored = message.metadata;
+  if (message.role !== "assistant" || !stored || Object.keys(stored).length === 0) {
+    return undefined;
+  }
+
+  return {
+    session_id: "",
+    run_id: "",
+    response: message.content,
+    status: "completed",
+    mode: (stored.mode as ChatResponse["mode"]) ?? "plan",
+    trip_state: {},
+    suggested_options: (stored.suggested_options as string[]) ?? [],
+    suggested_places: (stored.suggested_places as ChatResponse["suggested_places"]) ?? [],
+    itinerary: (stored.itinerary as ChatResponse["itinerary"]) ?? null,
+    suggested_actions: (stored.suggested_actions as ChatResponse["suggested_actions"]) ?? [],
+    needs_clarification: false,
+    detected_language: message.language ?? "en",
+    destination: (stored.destination as string | null) ?? null,
+    llm_providers: [],
+    plan: [],
+    tool_calls: [],
+    steps_executed: 0,
+    replan_count: 0,
+    latency_ms: 0,
+    total_tokens: 0,
+  };
+}
+
 function ChatRoute({ session }: { session: { email: string | null; isAdmin: boolean } }) {
   const [historyToken, setHistoryToken] = useState(0);
   return (
@@ -204,7 +253,15 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
         setTurns(
           detail.messages
             .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+            .map((m) => ({
+              role: m.role as "user" | "assistant",
+              content: m.content,
+              // Rebuilt from what the reply stored. Without this, reopening a
+              // conversation dropped the map, the photographs and the
+              // clickable options and showed a wall of text - the metadata
+              // only ever existed on the live response and died with it.
+              meta: rehydrate(m),
+            })),
         );
         setTrip(detail.session.destination ? { destination: detail.session.destination } : {});
       } catch {

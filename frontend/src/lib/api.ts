@@ -177,6 +177,10 @@ export interface StoredMessage {
   content: string;
   language: string | null;
   created_at: string | null;
+  /** What an assistant reply needs to be drawn again - itinerary, advisory
+   *  options and their coordinates. Empty for user messages and for replies
+   *  written before this was persisted. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface Memory {

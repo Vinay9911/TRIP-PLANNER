@@ -329,6 +329,12 @@ class AgentRunner:
             "I could not put together an answer for that. Could you rephrase it?"
         )
 
+        # Computed once here rather than at the two places they are used, so
+        # what is stored on the message and what is returned to the caller
+        # cannot drift into disagreeing about the same turn.
+        itinerary = final_state.get("itinerary")
+        suggested_actions = _suggest_actions(final_state, records)
+
         assistant_message_id: str | None = None
         if self.sessions is not None:
             try:
@@ -338,6 +344,26 @@ class AgentRunner:
                     role="assistant",
                     content=response,
                     language=final_state.get("detected_language"),
+                    # Everything needed to draw this reply again. Reopening a
+                    # conversation used to lose the map, the photographs and
+                    # the clickable options, because only the string was ever
+                    # stored - the rest existed solely in the API response and
+                    # died with it. Deliberately not the whole trace: the plan
+                    # and tool calls belong to `agent_runs`, and duplicating
+                    # them here would make the message row the second place
+                    # they can disagree from.
+                    metadata={
+                        "mode": final_state.get("mode", "plan"),
+                        "destination": final_state.get("destination"),
+                        "itinerary": itinerary,
+                        "suggested_options": list(
+                            final_state.get("suggested_options") or []
+                        ),
+                        "suggested_places": list(
+                            final_state.get("suggested_places") or []
+                        ),
+                        "suggested_actions": suggested_actions,
+                    },
                 )
                 assistant_message_id = row.get("id")
 
@@ -364,8 +390,8 @@ class AgentRunner:
             trip_state=dict(final_state.get("trip_state") or {}),
             suggested_options=list(final_state.get("suggested_options") or []),
             suggested_places=list(final_state.get("suggested_places") or []),
-            itinerary=final_state.get("itinerary"),
-            suggested_actions=_suggest_actions(final_state, records),
+            itinerary=itinerary,
+            suggested_actions=suggested_actions,
             detected_language=final_state.get("detected_language", "en"),
             destination=final_state.get("destination"),
             needs_clarification=bool(final_state.get("needs_clarification")),

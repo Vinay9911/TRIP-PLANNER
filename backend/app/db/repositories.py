@@ -181,8 +181,22 @@ class SessionRepository:
         content: str,
         language: str | None = None,
         token_count: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Append a message to a conversation.
+
+        Args:
+            session_id: Conversation to append to.
+            user_id: Owner, for RLS scoping.
+            role: "user" or "assistant".
+            content: The message text.
+            language: Detected language of the message.
+            token_count: Tokens the message cost, when known.
+            metadata: Everything needed to re-render this reply later - the
+                itinerary, the advisory options and their coordinates. Without
+                it, reopening a conversation showed a wall of text: the map,
+                the photographs and the clickable options all lived in the API
+                response and nothing but the string was ever stored.
 
         Returns:
             The new message row, including its id for memory provenance.
@@ -191,11 +205,19 @@ class SessionRepository:
             cursor = await conn.execute(
                 """
                 insert into public.messages
-                    (session_id, user_id, role, content, language, token_count)
-                values (%s, %s, %s::public.message_role, %s, %s, %s)
+                    (session_id, user_id, role, content, language, token_count, metadata)
+                values (%s, %s, %s::public.message_role, %s, %s, %s, %s::jsonb)
                 returning id::text, session_id::text, role, content, language, created_at
                 """,
-                (session_id, user_id, role, content, language, token_count),
+                (
+                    session_id,
+                    user_id,
+                    role,
+                    content,
+                    language,
+                    token_count,
+                    json.dumps(metadata or {}),
+                ),
             )
             row = await cursor.fetchone()
         return dict(row or {})
@@ -207,7 +229,7 @@ class SessionRepository:
         async with self.db.user_scope(user_id) as conn:
             cursor = await conn.execute(
                 """
-                select id::text, role, content, language, created_at
+                select id::text, role, content, language, created_at, metadata
                   from public.messages
                  where session_id = %s
                  order by created_at
