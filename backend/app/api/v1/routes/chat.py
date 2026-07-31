@@ -113,6 +113,7 @@ async def chat(
         message=payload.message,
         trip_state=trip_state,
         focus=focus,
+        local_only=payload.local_only,
     )
 
     # Respect the memory opt-out by not scheduling extraction at all, rather
@@ -136,6 +137,7 @@ async def chat(
         status=result.status,  # type: ignore[arg-type]
         mode=result.mode,  # type: ignore[arg-type]
         trip_state=result.trip_state,
+        llm_providers=result.llm_providers,
         suggested_options=result.suggested_options,
         itinerary=result.itinerary,
         suggested_actions=result.suggested_actions,

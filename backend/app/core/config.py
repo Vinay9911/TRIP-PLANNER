@@ -63,6 +63,22 @@ class Settings(BaseSettings):
     llm_responder_temperature: float = Field(default=0.4, ge=0.0, le=2.0)
     llm_timeout_seconds: int = Field(default=60, ge=5)
 
+    # -- LLM (local, via Ollama) ------------------------------------------
+    # "groq" is cloud only; "local" never leaves the machine; "auto" prefers
+    # Groq and falls back to Ollama once the daily token budget is spent,
+    # which is the only failure a second cloud key cannot fix.
+    #
+    # Model choice here is measured, not assumed. On a 4GB laptop GPU
+    # `llama3.2:3b` ran at 47.8 tok/s and emitted correct tool calls;
+    # `llama3.1:8b` was correct but 6x slower because it does not fit in
+    # VRAM; `qwen3:4b` produced no tool calls at all and is unusable as an
+    # executor whatever its other merits.
+    llm_provider: Literal["groq", "local", "auto"] = "auto"
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_planner_model: str = "llama3.2:3b"
+    ollama_executor_model: str = "llama3.2:3b"
+    ollama_utility_model: str = "llama3.2:3b"
+
     # -- Embeddings (Gemini) ----------------------------------------------
     # Also accepts a comma-separated list, pooled the same way.
     gemini_api_key: SecretStr = SecretStr("")

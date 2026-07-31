@@ -174,6 +174,10 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [retryMessage, setRetryMessage] = useState<string | null>(null);
   const [focus, setFocus] = useState<FocusService[]>(SERVICES.map((s) => s.id));
+  // Off by default: Groq is far faster, and the server falls back to the
+  // local model by itself once the daily quota is gone. This switch is for
+  // choosing local deliberately - offline, or to stop spending quota.
+  const [localOnly, setLocalOnly] = useState(false);
   const [trip, setTrip] = useState<TripState>({});
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -245,7 +249,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
       setBusy(true);
 
       try {
-        const reply = await api.chat(trimmed, sessionId, focus);
+        const reply = await api.chat(trimmed, sessionId, focus, localOnly);
         setSessionId(reply.session_id);
         setTrip(reply.trip_state ?? {});
         setTurns((previous) => [
@@ -273,7 +277,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
         setBusy(false);
       }
     },
-    [busy, focus, sessionId, urlSession, router, onConversationSaved],
+    [busy, focus, localOnly, sessionId, urlSession, router, onConversationSaved],
   );
 
   const empty = turns.length === 0 && !loadingTranscript;
@@ -308,7 +312,10 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
       <div className="sticky bottom-0 space-y-2.5 bg-gradient-to-t from-[var(--color-paper)] via-[var(--color-paper)] to-transparent pb-5 pt-3">
         <TripBar trip={trip} />
 
-        <IncludeControl focus={focus} onToggle={toggleService} />
+        <div className="flex flex-wrap items-center gap-2">
+          <IncludeControl focus={focus} onToggle={toggleService} />
+          <EngineControl localOnly={localOnly} onToggle={() => setLocalOnly((on) => !on)} />
+        </div>
         <TripDetailsPicker onInsert={insertPrompt} />
 
         <form
@@ -552,6 +559,26 @@ function Message({
             {meta.detected_language !== "en" && (
               <Badge>{meta.detected_language.toUpperCase()}</Badge>
             )}
+            {/* Which brain answered. Worth a badge because it is the single
+                best explanation for why one reply took a second and the next
+                took a minute - and "both" is a real state, when the cloud
+                quota ran out part-way through the turn. */}
+            {meta.llm_providers?.length > 0 && (
+              <span
+                title={
+                  meta.llm_providers.includes("local")
+                    ? "Served by llama3.2 running on this machine."
+                    : "Served by Groq."
+                }
+              >
+                <Badge tone={meta.llm_providers.includes("local") ? "grape" : undefined}>
+                  {meta.llm_providers.includes("local") &&
+                  meta.llm_providers.includes("groq")
+                    ? "groq → local"
+                    : meta.llm_providers[0]}
+                </Badge>
+              </span>
+            )}
             <span className="text-[var(--color-ink-faint)]">
               {(meta.latency_ms / 1000).toFixed(1)}s
             </span>
@@ -595,6 +622,54 @@ function Message({
  * is the quick-action chips and the follow-up offers, which are phrased as
  * things to do rather than capabilities to switch off.
  */
+/**
+ * Which brain is answering, and a switch to force the local one.
+ *
+ * This exists because waiting is only tolerable when you know what you are
+ * waiting for. A reply served by a 3B model on a laptop GPU is genuinely
+ * slower than one from Groq, and without saying so the interface just looks
+ * broken - the single most common complaint about this app so far.
+ *
+ * Off by default, deliberately. Groq answers in about a second and the server
+ * already falls back to local on its own when the daily quota is spent, so
+ * the honest default is "use the fast one until it runs out". The switch is
+ * for choosing local on purpose: offline, or to stop burning quota while
+ * testing.
+ */
+function EngineControl({
+  localOnly,
+  onToggle,
+}: {
+  localOnly: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={localOnly}
+      title={
+        localOnly
+          ? "Running on llama3.2 on this machine. Slower, no quota, nothing leaves your computer."
+          : "Running on Groq. Switches to the local model automatically if the daily quota runs out."
+      }
+      className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors duration-200 ${
+        localOnly
+          ? "border-[var(--color-grape)]/40 bg-[var(--color-grape-soft)] text-[var(--color-grape)]"
+          : "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-soft)] hover:border-[var(--color-brand)]"
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`size-1.5 rounded-full ${
+          localOnly ? "bg-[var(--color-grape)]" : "bg-[var(--color-mint)]"
+        }`}
+      />
+      {localOnly ? "Local model" : "Groq (fast)"}
+    </button>
+  );
+}
+
 function IncludeControl({
   focus,
   onToggle,

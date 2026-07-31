@@ -59,6 +59,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError, RateLimitError
 from app.core.logging import get_logger
 from app.services.keys import AllKeysExhausted, KeyPool, get_pool
+from app.services.usage import is_local_only, record_provider
 from app.services.usage import record as record_usage
 
 logger = get_logger(__name__)
@@ -112,6 +113,22 @@ def _build_model(
     Returns:
         A configured chat model.
     """
+    # The empty key is how a local model is requested. Ollama has no
+    # credential, so there is nothing to pool or rotate, and the key that
+    # every cloud path threads around is simply absent - which makes "no key"
+    # the honest signal rather than a separate flag to keep in sync.
+    if not api_key:
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(
+            model=model_name,
+            temperature=temperature,
+            base_url=get_settings().ollama_base_url,
+            # Local generation is slower per token than Groq, so the cloud
+            # timeout would cut off a working answer part-written.
+            timeout=max(timeout, 300),
+        )
+
     from langchain_groq import ChatGroq
 
     # `max_retries=0` because retries are handled by `invoke_with_retry`
@@ -246,22 +263,59 @@ def models_for_role(role: ModelRole, cfg: Settings) -> list[str]:
     return unique
 
 
-def _resolve_role(role: ModelRole, cfg: Settings, temperature: float | None) -> tuple[str, float]:
+def resolve_provider(cfg: Settings, *, prefer_local: bool = False) -> str:
+    """Decide which provider serves this call.
+
+    Args:
+        cfg: Application settings.
+        prefer_local: Force local for this request, whatever the default is.
+            Set from the chat request so a traveller can opt out of the cloud
+            per conversation without an environment change.
+
+    Returns:
+        "groq" or "local".
+    """
+    if prefer_local or is_local_only() or cfg.llm_provider == "local":
+        return "local"
+    if cfg.llm_provider == "groq":
+        return "groq"
+
+    # "auto": the cloud is faster, so it is only abandoned once there is no
+    # cloud left to use. `available_count` already accounts for the long
+    # cooldown a daily exhaustion parks a key under, so this reads as "every
+    # key is spent" rather than "one key is briefly busy".
+    return "groq" if get_llm_pool(cfg).available_count() > 0 else "local"
+
+
+def _resolve_role(
+    role: ModelRole, cfg: Settings, temperature: float | None, provider: str = "groq"
+) -> tuple[str, float]:
     """Map a role onto its model name and sampling temperature.
 
     Args:
         role: Which class of work the call belongs to.
         cfg: Application settings.
         temperature: Explicit override, or None for the role default.
+        provider: "groq" or "local"; selects which model names apply.
 
     Returns:
         A tuple of (model name, temperature).
     """
-    model_by_role = {
-        ModelRole.PLANNER: cfg.llm_planner_model,
-        ModelRole.EXECUTOR: cfg.llm_executor_model,
-        ModelRole.UTILITY: cfg.llm_utility_model,
-    }
+    if provider == "local":
+        model_by_role = {
+            ModelRole.PLANNER: cfg.ollama_planner_model,
+            ModelRole.EXECUTOR: cfg.ollama_executor_model,
+            ModelRole.UTILITY: cfg.ollama_utility_model,
+        }
+    else:
+        model_by_role = {
+            ModelRole.PLANNER: cfg.llm_planner_model,
+            ModelRole.EXECUTOR: cfg.llm_executor_model,
+            ModelRole.UTILITY: cfg.llm_utility_model,
+        }
+
+    # Temperatures are a property of the work, not of who serves it, so the
+    # same values apply to both providers.
     default_temperature_by_role = {
         # Planning is near-deterministic: the same goal should decompose the
         # same way twice, otherwise debugging a bad plan is guesswork.
@@ -283,6 +337,7 @@ def get_model(
     settings: Settings | None = None,
     temperature: float | None = None,
     model_name: str | None = None,
+    prefer_local: bool = False,
 ) -> BaseChatModel:
     """Return a chat model for a role, bound to one key from the pool.
 
@@ -299,6 +354,7 @@ def get_model(
         role: Which class of work the call belongs to.
         settings: Settings override, for tests.
         temperature: Sampling override.
+        prefer_local: Force the local provider for this call.
         model_name: Use this model instead of the role's default. The executor
             passes one when stepping down its fallback chain, since Groq's
             daily budget is per model and a spent bucket is escaped by
@@ -311,14 +367,21 @@ def get_model(
         AllKeysExhausted: If every key is currently cooling down.
     """
     cfg = settings or get_settings()
-    default_model, resolved_temperature = _resolve_role(role, cfg, temperature)
+    provider = resolve_provider(cfg, prefer_local=prefer_local)
+    default_model, resolved_temperature = _resolve_role(role, cfg, temperature, provider)
+
+    # An empty key is how `_build_model` is told to construct a local client;
+    # there is no credential to draw, and calling `acquire()` on a spent pool
+    # would raise the very exhaustion this path exists to route around.
+    api_key = "" if provider == "local" else get_llm_pool(cfg).acquire()
+    record_provider(provider)
 
     model = _build_model(
         role=role,
         model_name=model_name or default_model,
         temperature=resolved_temperature,
         timeout=cfg.llm_timeout_seconds,
-        api_key=get_llm_pool(cfg).acquire(),
+        api_key=api_key,
     )
 
     # Deliberately returned bare. An earlier version attached the usage
@@ -429,33 +492,56 @@ async def _invoke_rotating(
         ExternalServiceError: If every attempt failed for another reason.
     """
     pool = get_llm_pool(cfg)
-    _, resolved_temperature = _resolve_role(role, cfg, temperature)
+    provider = resolve_provider(cfg)
+    _, resolved_temperature = _resolve_role(role, cfg, temperature, provider)
 
     # Groq's daily token budget is per *model*, so a spent bucket is not the
     # end of the road - the same key can still serve a different model. The
     # candidate list is walked only on daily exhaustion; a per-minute limit or
     # a transient fault is handled by rotating keys on the current model,
     # which is both cheaper and keeps output quality where it was chosen.
-    candidates = models_for_role(role, cfg)
+    candidates = (
+        models_for_role(role, cfg)
+        if provider == "groq"
+        else [_resolve_role(role, cfg, temperature, "local")[0]]
+    )
     model_name = candidates[0]
     exhausted_models: set[str] = set()
 
-    attempts = max_attempts or (pool.size + 2)
+    # One attempt is enough locally: there is no key to rotate and no quota to
+    # escape, so a failure here is a real failure rather than a busy signal.
+    attempts = max_attempts or (pool.size + 2 if provider == "groq" else 2)
 
     last_error: Exception | None = None
 
     for attempt in range(1, attempts + 1):
-        try:
-            api_key = pool.acquire()
-        except AllKeysExhausted as exhausted:
-            last_error = exhausted
-            # Every key is resting. Wait only if the pause is short enough to
-            # be worth absorbing inside one request; otherwise fail fast so the
-            # agent can degrade rather than hang.
-            if attempt < attempts and exhausted.retry_after_seconds <= 20:
-                await asyncio.sleep(exhausted.retry_after_seconds + 0.5)
-                continue
-            raise
+        if provider == "local":
+            api_key = ""
+        else:
+            try:
+                api_key = pool.acquire()
+            except AllKeysExhausted as exhausted:
+                last_error = exhausted
+
+                # The cloud is spent. In "auto" this is exactly the moment the
+                # local model earns its place: finish the turn slowly rather
+                # than failing it, which is the whole point of keeping one.
+                if cfg.llm_provider == "auto":
+                    logger.info("llm.falling_back_to_local", purpose=purpose)
+                    provider = "local"
+                    model_name = _resolve_role(role, cfg, temperature, "local")[0]
+                    api_key = ""
+                    continue
+
+                # Every key is resting. Wait only if the pause is short enough
+                # to be worth absorbing inside one request; otherwise fail fast
+                # so the agent can degrade rather than hang.
+                if attempt < attempts and exhausted.retry_after_seconds <= 20:
+                    await asyncio.sleep(exhausted.retry_after_seconds + 0.5)
+                    continue
+                raise
+
+        record_provider(provider)
 
         model: Any = _build_model(
             role=role,

@@ -136,6 +136,10 @@ export interface ChatResponse {
   needs_clarification: boolean;
   detected_language: string;
   destination: string | null;
+  /** Which model providers actually served this turn - "groq", "local", or
+   *  both when the cloud quota ran out part-way through. Shown in the UI so a
+   *  slow reply reads as "running on your machine" rather than "hung". */
+  llm_providers: string[];
   plan: PlanStep[];
   tool_calls: ToolCall[];
   steps_executed: number;
@@ -276,7 +280,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 // ---------------------------------------------------------------------------
 
 export const api = {
-  chat: (message: string, sessionId?: string, focus?: FocusService[]) =>
+  chat: (
+    message: string,
+    sessionId?: string,
+    focus?: FocusService[],
+    localOnly?: boolean,
+  ) =>
     request<ChatResponse>("/api/v1/chat", {
       method: "POST",
       body: JSON.stringify({
@@ -285,6 +294,9 @@ export const api = {
         // A switched-off service is genuinely withheld from the agent - its
         // tool is removed and the planner is told not to plan work for it.
         focus: focus ?? null,
+        // Off by default: the cloud is faster, and the server already falls
+        // back to the local model on its own once quota runs out.
+        local_only: localOnly ?? false,
       }),
     }),
 

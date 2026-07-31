@@ -45,6 +45,16 @@ class ChatRequest(BaseModel):
         ),
     )
 
+    local_only: bool = Field(
+        default=False,
+        description=(
+            "Run this turn entirely on the locally hosted model instead of "
+            "Groq. Slower, but subject to no daily quota and nothing leaves "
+            "the machine. The default already falls back to local "
+            "automatically once the cloud budget is spent; this forces it."
+        ),
+    )
+
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -108,6 +118,15 @@ class ChatResponse(BaseModel):
             "The conversation's slot ledger after this turn - destination, "
             "origin, duration, priorities, and which services are in focus. "
             "What a client renders as the trip panel."
+        ),
+    )
+    llm_providers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Which model providers actually served this turn: 'groq', 'local', "
+            "or both when the cloud budget ran out part-way through. Surfaced "
+            "so a traveller waiting on a slow reply can see it is running on "
+            "their own machine rather than guessing the app has hung."
         ),
     )
     itinerary: dict[str, Any] | None = Field(

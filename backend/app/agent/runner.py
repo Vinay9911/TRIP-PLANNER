@@ -42,7 +42,14 @@ from app.core.logging import bind_request_context, get_logger
 from app.db.repositories import SessionRepository, TraceRepository
 from app.memory.service import MemoryService
 from app.rag.retriever import MultiHopRetriever
-from app.services.usage import TokenUsage, start_metering, stop_metering, total_rag_hops
+from app.services.usage import (
+    TokenUsage,
+    active_providers,
+    set_local_only,
+    start_metering,
+    stop_metering,
+    total_rag_hops,
+)
 from app.tools.base import ToolCallRecord, start_recording, stop_recording
 from app.tools.context import ToolContext, reset_tool_context, set_tool_context
 
@@ -66,6 +73,8 @@ class TurnResult:
         replan_count: How many times the plan was revised.
         tool_calls: Every tool invocation made.
         latency_ms: Wall-clock duration.
+        llm_providers: Providers that served this turn - 'groq', 'local',
+            or both if the cloud budget ran out part-way through.
         user_message_id: Stored id of the traveller's message.
         assistant_message_id: Stored id of the reply.
     """
@@ -91,6 +100,7 @@ class TurnResult:
     completion_tokens: int = 0
     token_breakdown: list[dict[str, object]] = None  # type: ignore[assignment]
     rag_hops: int = 0
+    llm_providers: list[str] = None  # type: ignore[assignment]
     user_message_id: str | None = None
     assistant_message_id: str | None = None
 
@@ -108,6 +118,8 @@ class TurnResult:
             self.suggested_options = []
         if self.suggested_actions is None:
             self.suggested_actions = []
+        if self.llm_providers is None:
+            self.llm_providers = []
 
 
 def _suggest_actions(
@@ -178,6 +190,7 @@ class AgentRunner:
         history: list[dict[str, str]] | None = None,
         trip_state: dict[str, Any] | None = None,
         focus: list[str] | None = None,
+        local_only: bool = False,
     ) -> TurnResult:
         """Process one user message and produce a reply.
 
@@ -192,6 +205,7 @@ class AgentRunner:
                 after the turn.
             focus: Services the traveller has enabled in the UI, or None
                 for all of them.
+            local_only: Keep this turn entirely on the local model.
 
         Returns:
             The turn's result, including the trace data needed to persist it.
@@ -227,6 +241,7 @@ class AgentRunner:
 
         records = start_recording()
         meter: TokenUsage = start_metering()
+        set_local_only(local_only)
         context_token = set_tool_context(
             ToolContext(
                 user_id=user_id,
@@ -317,6 +332,7 @@ class AgentRunner:
             prompt_tokens=meter.prompt_tokens,
             completion_tokens=meter.completion_tokens,
             token_breakdown=meter.summary(),
+            llm_providers=active_providers(),
             rag_hops=rag_hops,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,

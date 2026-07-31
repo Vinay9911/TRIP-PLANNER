@@ -24,6 +24,11 @@ class TokenUsage:
     calls: int = 0
     #: Per-purpose totals, e.g. {"create_plan": (1, 2400, 180)}.
     by_stage: dict[str, tuple[int, int, int]] = field(default_factory=dict)
+    #: Which providers actually served this run - "groq", "local", or both
+    #: when a run started on the cloud and fell back mid-way. Recorded because
+    #: a traveller watching a slow reply deserves to know it is running on
+    #: their own laptop rather than assuming the app is broken.
+    providers: set[str] = field(default_factory=set)
 
     @property
     def total_tokens(self) -> int:
@@ -101,6 +106,47 @@ def record(purpose: str, prompt: int, completion: int) -> None:
     meter = _meter.get()
     if meter is not None:
         meter.add(purpose, prompt, completion)
+
+
+#: Set for one turn when the traveller asked to stay off the cloud.
+#:
+#: Context-local for the same reason the meter is: the alternative is an
+#: argument threaded through every node, every tool and both call helpers, to
+#: be read in exactly one place. Concurrent requests keep their own value.
+_local_only: ContextVar[bool] = ContextVar("llm_local_only", default=False)
+
+
+def set_local_only(value: bool) -> None:
+    """Force this turn onto the local model.
+
+    Args:
+        value: True to stay off the cloud for the rest of the turn.
+    """
+    _local_only.set(value)
+
+
+def is_local_only() -> bool:
+    """Whether this turn has been forced onto the local model."""
+    return _local_only.get()
+
+
+def record_provider(name: str) -> None:
+    """Note that a provider served at least one call in this run.
+
+    Args:
+        name: "groq" or "local".
+    """
+    meter = _meter.get()
+    if meter is not None:
+        meter.providers.add(name)
+
+
+def active_providers() -> list[str]:
+    """Return the providers used so far in this run, cloud first."""
+    meter = _meter.get()
+    if meter is None:
+        return []
+    return sorted(meter.providers, key=lambda name: name != "groq")
 
 
 def record_rag_hops(count: int) -> None:
