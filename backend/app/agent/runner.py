@@ -42,10 +42,10 @@ from app.core.logging import bind_request_context, get_logger
 from app.db.repositories import SessionRepository, TraceRepository
 from app.memory.service import MemoryService
 from app.rag.retriever import MultiHopRetriever
+from app.services.facts import collected_facts, start_facts, stop_facts
 from app.services.progress import emit
 from app.services.usage import (
     TokenUsage,
-    active_providers,
     set_local_only,
     start_metering,
     stop_metering,
@@ -102,6 +102,7 @@ class TurnResult:
     completion_tokens: int = 0
     token_breakdown: list[dict[str, object]] = None  # type: ignore[assignment]
     rag_hops: int = 0
+    trip_facts: dict[str, Any] = None  # type: ignore[assignment]
     llm_providers: list[str] = None  # type: ignore[assignment]
     user_message_id: str | None = None
     assistant_message_id: str | None = None
@@ -124,6 +125,8 @@ class TurnResult:
             self.suggested_actions = []
         if self.llm_providers is None:
             self.llm_providers = []
+        if self.trip_facts is None:
+            self.trip_facts = {}
 
 
 #: Traveller-facing wording for each graph node.
@@ -285,6 +288,7 @@ class AgentRunner:
 
         records = start_recording()
         meter: TokenUsage = start_metering()
+        start_facts()
         set_local_only(local_only)
         context_token = set_tool_context(
             ToolContext(
@@ -318,11 +322,16 @@ class AgentRunner:
             # read has to happen before the clear rather than after.
             rag_hops = total_rag_hops()
 
+            # Same trap, same fix: `collected_facts()` reads a ContextVar that
+            # `stop_facts()` is about to clear, so the read happens here.
+            facts = collected_facts()
+
             # Both must unwind even on failure: a leaked tool context would
             # let the next request inherit this user's identity.
             reset_tool_context(context_token)
             stop_recording()
             stop_metering()
+            stop_facts()
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         response = final_state.get("final_response") or (
@@ -363,6 +372,7 @@ class AgentRunner:
                             final_state.get("suggested_places") or []
                         ),
                         "suggested_actions": suggested_actions,
+                        "trip_facts": facts,
                     },
                 )
                 assistant_message_id = row.get("id")
@@ -403,7 +413,8 @@ class AgentRunner:
             prompt_tokens=meter.prompt_tokens,
             completion_tokens=meter.completion_tokens,
             token_breakdown=meter.summary(),
-            llm_providers=active_providers(),
+            llm_providers=meter.provider_list(),
+            trip_facts=facts,
             rag_hops=rag_hops,
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,

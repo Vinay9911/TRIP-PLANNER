@@ -313,6 +313,7 @@ def _to_response(result: Any) -> ChatResponse:
         llm_providers=result.llm_providers,
         suggested_options=result.suggested_options,
         suggested_places=result.suggested_places,
+        trip_facts=result.trip_facts,
         itinerary=result.itinerary,
         suggested_actions=result.suggested_actions,
         needs_clarification=result.needs_clarification,

@@ -54,6 +54,10 @@
 
   /* Feedback */
   --color-warn: #b45309;
+  /* Backing for the "Simulated" badge. Warm enough to read as a caution
+     rather than an error - generated prices are a limitation to disclose,
+     not a fault - and it clears 4.5:1 against --color-warn. */
+  --color-warn-soft: #fdf0dc;
   --color-danger: #be123c;
   --color-success: #0f766e;
 

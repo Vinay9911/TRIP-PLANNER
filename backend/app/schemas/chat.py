@@ -145,6 +145,17 @@ class ChatResponse(BaseModel):
             "run yet, so a switched-off service is never offered."
         ),
     )
+    trip_facts: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Structured findings from this turn, keyed by panel - 'weather', "
+            "'stays', 'flights', 'places'. Each carries the tool payload plus "
+            "`source` and `simulated`, so a client renders the numbers "
+            "themselves instead of the model's sentence about them, and always "
+            "alongside where they came from. Flight and hotel prices are "
+            "generated: `simulated` is true for those and must be shown."
+        ),
+    )
     suggested_places: list[dict[str, Any]] = Field(
         default_factory=list,
         description=(

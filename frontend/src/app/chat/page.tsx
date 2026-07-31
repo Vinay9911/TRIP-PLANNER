@@ -33,6 +33,7 @@ import { AppShell } from "@/components/AppShell";
 import { ItineraryView } from "@/components/Itinerary";
 import { PlaceMap, type MappedItem } from "@/components/PlaceMap";
 import { PlacePhoto } from "@/components/PlacePhoto";
+import { TripPanel, TripPanelDrawer } from "@/components/TripPanel";
 import { AuthGate } from "@/components/AuthGate";
 import {
   IconBed,
@@ -66,6 +67,7 @@ import {
   type ChatResponse,
   type FocusService,
   type ProgressEvent,
+  type TripFact,
   type StoredMessage,
   type TripState,
 } from "@/lib/api";
@@ -189,6 +191,7 @@ function rehydrate(message: StoredMessage): ChatResponse | undefined {
     trip_state: {},
     suggested_options: (stored.suggested_options as string[]) ?? [],
     suggested_places: (stored.suggested_places as ChatResponse["suggested_places"]) ?? [],
+    trip_facts: (stored.trip_facts as ChatResponse["trip_facts"]) ?? {},
     itinerary: (stored.itinerary as ChatResponse["itinerary"]) ?? null,
     suggested_actions: (stored.suggested_actions as ChatResponse["suggested_actions"]) ?? [],
     needs_clarification: false,
@@ -232,6 +235,16 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
   const [localOnly, setLocalOnly] = useState(false);
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [trip, setTrip] = useState<TripState>({});
+  // Carried forward rather than read off the newest reply. Asking about
+  // hotels and then about the weather must not blank the hotels: the panel
+  // shows the trip's current state, which is cumulative even though each
+  // individual reply is not.
+  const [facts, setFacts] = useState<{
+    weather?: TripFact;
+    stays?: TripFact;
+    flights?: TripFact;
+  }>({});
+  const [pins, setPins] = useState<MappedItem[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -244,6 +257,8 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
         setTurns([]);
         setSessionId(undefined);
         setTrip({});
+        setFacts({});
+        setPins([]);
         return;
       }
       setLoadingTranscript(true);
@@ -265,6 +280,16 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
             })),
         );
         setTrip(detail.session.destination ? { destination: detail.session.destination } : {});
+
+        // Replay the stored replies so a reopened conversation arrives with
+        // its map and panels intact rather than rebuilding only on the next
+        // message.
+        setFacts({});
+        setPins([]);
+        for (const message of detail.messages) {
+          const restored = rehydrate(message);
+          if (restored) absorb(restored);
+        }
       } catch {
         if (!cancelled) setError("That conversation could not be opened.");
       } finally {
@@ -291,6 +316,49 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
       // the order the user clicked in.
       return SERVICES.map((s) => s.id).filter((s) => next.has(s));
     });
+  }
+
+  /**
+   * Fold a reply into the panel's cumulative view.
+   *
+   * Only overwrites a panel when this turn actually produced something for
+   * it, so a weather question leaves the hotels where they were.
+   */
+  function absorb(reply: ChatResponse) {
+    const next = reply.trip_facts ?? {};
+    setFacts((previous) => ({
+      weather: next.weather ?? previous.weather,
+      stays: next.stays ?? previous.stays,
+      flights: next.flights ?? previous.flights,
+    }));
+
+    const fromItinerary: MappedItem[] = [];
+    let index = 0;
+    for (const day of reply.itinerary?.days ?? []) {
+      for (const item of [...day.all_day, ...day.morning, ...day.afternoon, ...day.evening]) {
+        if (item.latitude != null && item.longitude != null) {
+          fromItinerary.push({ ...item, index: ++index, dayNumber: day.day_number });
+        }
+      }
+    }
+
+    const fromOptions: MappedItem[] = (reply.suggested_places ?? []).map((place, position) => ({
+      name: place.name,
+      kind: "neighbourhood" as const,
+      district: null,
+      description: "",
+      latitude: place.latitude,
+      longitude: place.longitude,
+      approx_duration: null,
+      booking_note: null,
+      index: position + 1,
+      dayNumber: 1,
+    }));
+
+    // An itinerary supersedes the options that led to it - showing both would
+    // pin the same city twice, once as a suggestion and once as a stop.
+    if (fromItinerary.length > 0) setPins(fromItinerary);
+    else if (fromOptions.length > 0) setPins(fromOptions);
   }
 
   function insertPrompt(prompt: string) {
@@ -329,6 +397,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
         });
         setProgress([]);
         setSessionId(reply.session_id);
+        absorb(reply);
         setTrip(reply.trip_state ?? {});
         setTurns((previous) => [
           ...previous,
@@ -362,7 +431,8 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
   const empty = turns.length === 0 && !loadingTranscript;
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col px-4 sm:px-6">
+    <div className="mx-auto grid w-full max-w-[100rem] grid-cols-1 gap-6 px-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_25rem]">
+      <div className="flex min-h-dvh flex-col">
       <div className="flex-1 space-y-5 py-6">
         {loadingTranscript && (
           <div className="space-y-3">
@@ -389,6 +459,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
       </div>
 
       <div className="sticky bottom-0 space-y-2.5 bg-gradient-to-t from-[var(--color-paper)] via-[var(--color-paper)] to-transparent pb-5 pt-3">
+        <TripPanelDrawer trip={trip} facts={facts} pins={pins} busy={busy} />
         <TripBar trip={trip} />
 
         <div className="flex flex-wrap items-center gap-2">
@@ -435,6 +506,17 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
           Flight and hotel prices are simulated. Everything else is real data.
         </p>
       </div>
+      </div>
+
+      {/* Sticky rather than scrolling with the transcript: this describes the
+          state of the trip, not a moment in the conversation, so it should
+          still be there after three more messages. `top` clears the shell's
+          header; the panel scrolls internally when it outgrows the viewport. */}
+      <aside className="hidden lg:block">
+        <div className="sticky top-4 max-h-[calc(100dvh-2rem)] overflow-y-auto py-6 pr-1">
+          <TripPanel trip={trip} facts={facts} pins={pins} busy={busy} />
+        </div>
+      </aside>
     </div>
   );
 }

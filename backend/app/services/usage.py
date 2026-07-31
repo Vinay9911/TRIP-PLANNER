@@ -50,6 +50,19 @@ class TokenUsage:
         calls, prompts, completions = self.by_stage.get(purpose, (0, 0, 0))
         self.by_stage[purpose] = (calls + 1, prompts + prompt, completions + completion)
 
+    def provider_list(self) -> list[str]:
+        """Providers that served this run, cloud first.
+
+        A method on the object rather than only a module function, because the
+        runner holds this object across `stop_metering()` while the ContextVar
+        the module function reads is already cleared by then - which silently
+        returned an empty list for every run.
+
+        Returns:
+            Provider names, "groq" before "local".
+        """
+        return sorted(self.providers, key=lambda name: name != "groq")
+
     def summary(self) -> list[dict[str, object]]:
         """Render the per-stage breakdown, most expensive first."""
         rows = [

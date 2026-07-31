@@ -85,6 +85,24 @@ class PlaceImage:
     source_page: str | None = None
 
 
+#: Itinerary kinds mapped to words photographs are actually tagged with.
+#:
+#: `ItemKind` is written for planning ("stay", "sight", "note"), and those are
+#: not terms a photo library indexes on. A hotel needs to look like a hotel
+#: even when the specific property has no picture - especially here, where the
+#: accommodation provider is a mock and the property is "Lucknow 3-star hotel",
+#: a name no photograph on earth is attached to.
+_PHOTO_KEYWORD: dict[str, str] = {
+    "stay": "hotel",
+    "food": "restaurant",
+    "sight": "landmark",
+    "activity": "travel",
+    "transport": "railwaystation",
+    "neighbourhood": "cityscape",
+    "note": "travel",
+}
+
+
 class ImageResolver:
     """Resolves place names and coordinates to photographs.
 
@@ -172,9 +190,17 @@ class ImageResolver:
             if found:
                 return found
 
-        found = await self._from_wikipedia(cleaned, destination)
-        if found:
-            return found
+        # Encyclopaedia lookup is skipped for accommodation. Hotels do not have
+        # Wikipedia articles, so the search cannot succeed - but it can still
+        # *match*, on the city half of the name. "Lucknow 4-star hotel"
+        # returned a photograph of Hazratganj Market, which would then have
+        # been captioned as that hotel and marked as a genuine photo of it.
+        # A labelled representative picture of a hotel is more honest than an
+        # unlabelled real picture of something else entirely.
+        if kind != "stay":
+            found = await self._from_wikipedia(cleaned, destination)
+            if found:
+                return found
 
         if latitude is not None and longitude is not None:
             found = await self._from_commons_geo(latitude, longitude)
@@ -310,7 +336,12 @@ class ImageResolver:
         given place always shows the same picture rather than changing on
         every render - a card that reshuffles its own photo looks broken.
         """
-        terms = [t for t in (kind, destination or name) if t]
+        # The itinerary's own vocabulary is not photographic vocabulary.
+        # Passing `kind` through raw searched Flickr for "stay" and "sight",
+        # which return nothing coherent - a hotel card ended up with whatever
+        # the destination keyword alone produced. Mapped to what a photograph
+        # of that thing is actually tagged as.
+        terms = [t for t in (_PHOTO_KEYWORD.get(kind or "", kind), destination or name) if t]
         keywords = ",".join(quote(_clean(t).lower().replace(" ", "")) for t in terms) or "travel"
         lock = int(hashlib.sha256(name.encode("utf-8")).hexdigest()[:6], 16) % 10_000
 

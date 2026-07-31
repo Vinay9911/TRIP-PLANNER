@@ -119,6 +119,29 @@ export interface ToolCall {
   latency_ms: number;
 }
 
+/**
+ * One structured finding, with where it came from.
+ *
+ * `simulated` is the field that matters and is never optional: the flight and
+ * hotel providers are mocks, and a generated price rendered like a real one is
+ * the most misleading thing this interface could show.
+ */
+export interface TripFact {
+  panel: string;
+  tool: string;
+  source: string;
+  simulated: boolean;
+  data: Record<string, unknown>;
+}
+
+/** Structured findings keyed by the panel that renders them. */
+export interface TripFacts {
+  weather?: TripFact;
+  stays?: TripFact;
+  flights?: TripFact;
+  places?: TripFact;
+}
+
 /** One line of "here is what I am doing", streamed while a turn runs. */
 export interface ProgressEvent {
   kind: "stage" | "step" | "tool" | "note";
@@ -140,6 +163,8 @@ export interface ChatResponse {
   /** The same options with coordinates, so an advisory turn can be mapped and
    *  illustrated rather than being a list of bare names. */
   suggested_places: { name: string; latitude: number; longitude: number }[];
+  /** Structured tool findings for the trip panel, with provenance. */
+  trip_facts: TripFacts;
   /** The plan as structured days, when this turn produced one. */
   itinerary: Itinerary | null;
   /** Follow-up offers derived server-side from what has not run yet. */

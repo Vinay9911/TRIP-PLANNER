@@ -59,6 +59,7 @@ from pydantic import BaseModel, Field
 
 from app.core.errors import ExternalServiceError, RateLimitError, ToolExecutionError
 from app.core.logging import get_logger
+from app.services.facts import record_fact
 from app.services.progress import emit, label_for_tool
 
 logger = get_logger(__name__)
@@ -438,6 +439,13 @@ def resilient_tool(
                     error_message=error_message,
                 )
             )
+
+            # Structured payloads are kept for the interface to render, so a
+            # forecast or a price reaches the screen as data rather than as a
+            # sentence the model wrote about it. Successful calls only: a
+            # degraded result has nothing worth showing.
+            if result.status is ToolStatus.OK:
+                record_fact(tool_name, source, result.data)
 
             # Only successful results are cached. A degraded result should not
             # pin an outage for the rest of the run - the dependency may
