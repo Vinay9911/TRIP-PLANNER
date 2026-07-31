@@ -37,7 +37,8 @@ from app.agent.state import AgentState, PlanStep, StepResult
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError, RateLimitError
 from app.core.logging import get_logger
-from app.tools.base import ToolCallRecord
+from app.services.progress import emit
+from app.tools.base import ToolCallRecord, start_step_recording
 from app.tools.registry import get_tools_for_step
 
 logger = get_logger(__name__)
@@ -83,23 +84,177 @@ Do not write the final answer to the traveller. Report findings.\
 """
 
 
+async def _run_one_step(
+    step: PlanStep, state: AgentState, cfg: Settings
+) -> tuple[StepResult, list[ToolCallRecord]]:
+    """Run a single step in isolation, returning its result and its tool calls.
+
+    Never raises: a step that fails is a `StepResult` with `succeeded=False`,
+    because the replanner may be able to route around it and one bad step must
+    not take its concurrent siblings down with it.
+
+    Args:
+        step: The step to run.
+        state: Graph state, read for focus and the replan cycle.
+        cfg: Application settings.
+
+    Returns:
+        The step's result, and the tool calls it made.
+    """
+    own_records = start_step_recording()
+    started = time.perf_counter()
+
+    try:
+        output = await _run_step_agent(
+            _build_step_prompt(state, step), cfg, focus=state.get("focus"), kind=step.kind
+        )
+        succeeded, error = True, None
+
+    except TimeoutError:
+        logger.warning("agent.step_timeout", step=step.description[:80])
+        output, succeeded = "", False
+        error = f"Step timed out after {cfg.agent_step_timeout_seconds}s."
+
+    except ExternalServiceError as exc:
+        logger.warning("agent.step_failed", step=step.description[:80], error=exc.message)
+        output, succeeded = "", False
+        error = exc.message
+
+    except Exception as exc:
+        # Broad by intent - see the docstring. A defect in one step must not
+        # take down the siblings running beside it, and the replanner may be
+        # able to route around the gap. Logged with a traceback because,
+        # unlike the branches above, this indicates a bug rather than weather.
+        logger.exception("agent.step_unexpected_error", step=step.description[:80])
+        output, succeeded = "", False
+        error = f"Unexpected error: {str(exc)[:200]}"
+
+    return (
+        StepResult(
+            step=step,
+            succeeded=succeeded,
+            output=output,
+            tools_used=[record.tool_name for record in own_records],
+            replan_cycle=state.get("replan_count", 0),
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            error=error,
+        ),
+        own_records,
+    )
+
+
+async def _run_batch(
+    batch: list[PlanStep],
+    state: AgentState,
+    cfg: Settings,
+    *,
+    tool_records: list[ToolCallRecord] | None,
+    index: int,
+) -> AgentState:
+    """Run several independent steps at once.
+
+    The wall-clock cost of the batch becomes its slowest member rather than the
+    sum of all of them. On a typical five-step plan the two or three research
+    steps are mutually independent, which is where the saving is.
+
+    Concurrency also helps the *token* budget rather than hurting it, which is
+    not obvious: Groq's per-minute allowance is per key, and the key pool hands
+    each concurrent step a different one, so a burst spreads across keys
+    instead of stacking on one. The daily allowance is unaffected either way -
+    the same work is done, just sooner.
+
+    Args:
+        batch: Steps to run together, in plan order.
+        state: Graph state.
+        cfg: Application settings.
+        tool_records: The run's recorder, extended in plan order afterwards.
+        index: Index of the first step in the batch.
+
+    Returns:
+        A state update carrying every result and advancing past the batch.
+    """
+    emit(
+        "stage",
+        "Researching several things at once",
+        detail=f"{len(batch)} in parallel",
+        steps=len(batch),
+    )
+    started = time.perf_counter()
+
+    results = await asyncio.gather(*(_run_one_step(step, state, cfg) for step in batch))
+
+    # Merged in plan order, not completion order. The trace is read by a human
+    # looking for what a given step did, and ordering it by whichever call
+    # happened to return first would make that needlessly hard to follow.
+    if tool_records is not None:
+        for _, records in results:
+            tool_records.extend(records)
+
+    logger.info(
+        "agent.batch_completed",
+        steps=len(batch),
+        kinds=[step.kind for step in batch],
+        succeeded=sum(1 for result, _ in results if result.succeeded),
+        latency_ms=int((time.perf_counter() - started) * 1000),
+    )
+
+    return AgentState(
+        completed_steps=[result for result, _ in results],
+        current_step_index=index + len(batch),
+    )
+
+
+def _batch_from(plan: list[PlanStep], index: int, *, limit: int) -> list[PlanStep]:
+    """Collect the steps that may run together, starting at `index`.
+
+    The current step always runs. Each following step joins it only while
+    `depends_on_previous` is false - the first step that needs a predecessor's
+    output ends the batch, and so does a `compose` step, which by definition
+    wants everything before it.
+
+    The field has existed on `PlanStep` since the first version and nothing
+    ever read it, so plans were executed strictly one step at a time: a
+    five-step plan meant five sequential round trips even when researching
+    attractions, checking the weather and finding stays needed nothing from
+    each other. That was the largest remaining source of latency.
+
+    Args:
+        plan: The full plan.
+        index: Where to start.
+        limit: Maximum steps in one batch.
+
+    Returns:
+        One or more steps to run concurrently, in plan order.
+    """
+    batch = [plan[index]]
+
+    for step in plan[index + 1 : index + limit]:
+        if step.depends_on_previous or step.kind == "compose":
+            break
+        batch.append(step)
+
+    return batch
+
+
 async def executor_node(
     state: AgentState,
     *,
     tool_records: list[ToolCallRecord] | None = None,
     settings: Settings | None = None,
 ) -> AgentState:
-    """Execute the current plan step.
+    """Execute the current plan step, with any independent steps beside it.
 
     Args:
         state: Current graph state. Requires `plan` and `current_step_index`.
-        tool_records: The live tool-call recorder, used to attribute calls to
-            this step by snapshotting its length before and after.
+        tool_records: The live tool-call recorder. Concurrent steps each get
+            their own, merged back here in plan order so the trace stays
+            deterministic and every call is attributed to the step that made
+            it.
         settings: Settings override, for tests.
 
     Returns:
-        A partial state update appending one `StepResult` and advancing the
-        step index.
+        A partial state update appending one `StepResult` per executed step and
+        advancing the step index past all of them.
     """
     cfg = settings or get_settings()
 
@@ -109,7 +264,12 @@ async def executor_node(
     if index >= len(plan):
         return AgentState(current_step_index=index)
 
-    step = plan[index]
+    batch = _batch_from(plan, index, limit=max(cfg.agent_max_parallel_steps, 1))
+
+    if len(batch) > 1:
+        return await _run_batch(batch, state, cfg, tool_records=tool_records, index=index)
+
+    step = batch[0]
     started = time.perf_counter()
     calls_before = len(tool_records) if tool_records is not None else 0
 

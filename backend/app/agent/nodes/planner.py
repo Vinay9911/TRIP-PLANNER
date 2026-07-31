@@ -46,9 +46,14 @@ class Plan(BaseModel):
             "one step."
         )
     )
-    reasoning: str = Field(
-        default="", max_length=300, description="One or two sentences on the approach."
-    )
+    # No max_length, deliberately. Groq validates tool arguments against the
+    # schema and rejects the whole call when one overruns - a 322-character
+    # reasoning string cost an entire planner call (1,103 in, 886 out) to a
+    # 400 before the retry succeeded, which on a 100k daily budget is a real
+    # price for a field that exists only to be logged. It is truncated to 120
+    # characters at the log line regardless, so the limit bought nothing and
+    # billed for the privilege.
+    reasoning: str = Field(default="", description="One or two sentences on the approach.")
 
 
 PLANNER_PROMPT = """\
@@ -67,6 +72,20 @@ HOW TO PLAN WELL
 - Order matters. Research the destination before looking for specific venues, \
   because what you learn first tells you where to look next.
 - The final step is always composing the answer, and it needs no tools.
+
+SAY WHICH STEPS NEED THE ONE BEFORE THEM
+Set depends_on_previous to false when a step could be carried out without \
+having seen the previous step's findings. Those steps are run at the same \
+time, so getting this right is most of what makes a plan fast.
+
+Ask only this: could someone start this step knowing nothing but the \
+traveller's request? Checking the weather for the dates needs only the \
+destination and the dates - false. Finding a hotel needs only the city and \
+the nights - false. But choosing which neighbourhood to stay in *because of* \
+what the research turned up genuinely needs that research first - true.
+
+Set it to true when in doubt: running something too early wastes the work, \
+while running it in sequence merely costs time.
 
 WHAT NOT TO DO
 - Do not create a step per tool. 'Check weather', 'find restaurants', \

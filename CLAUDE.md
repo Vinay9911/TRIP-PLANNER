@@ -207,6 +207,23 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
   code. `decide_mode` now clarifies only when there is genuinely no
   destination; the one truly blocked case (flights with no origin) is checked
   against the ledger.
+- **Concurrent steps break trace attribution unless each gets its own
+  recorder.** Tool calls were filed under a step by slicing the shared list
+  between a before and after length, which mis-attributes the moment two steps
+  interleave. `start_step_recording` rebinds the recorder inside each task and
+  the executor merges them back in *plan* order (not completion order). It
+  deliberately does **not** reset `_result_cache` - that dict is shared by
+  reference, and concurrent steps about one destination are the likeliest to
+  want the same guide article.
+- **`compose` must never join a parallel batch**, and this is enforced in code
+  rather than trusted to the planner's flag. A compose step marked independent
+  writes the answer from findings that have not arrived - a plausible-looking
+  itinerary rather than an obvious failure.
+- **Pydantic `max_length` on a structured-output field bills you for the
+  violation.** Groq validates tool arguments against the schema and rejects
+  the whole call, so a 322-character `reasoning` string burned an entire
+  planner call (1,103 in, 886 out) before the retry. Constrain a field only
+  where the constraint earns more than a wasted call costs.
 - **Progress must be free when nobody is listening.** `services/progress.py`
   is a no-op with no channel open, and drops on a full queue rather than
   blocking. The plain `/chat` endpoint opens no channel, so every emit on that
@@ -270,7 +287,7 @@ Destination photos are seeded placeholders, labelled as illustrative.
 
 ## Status
 
-Backend and frontend complete, 222 tests passing. Verified end-to-end against
+Backend and frontend complete, 229 tests passing. Verified end-to-end against
 live Supabase, Groq, Gemini, Tavily, Geoapify and Wikivoyage: planning, dynamic
 tool selection, multi-hop RAG, memory extraction and cross-session recall,
 clarification, Japanese replies, and the admin trace all confirmed working.
@@ -307,6 +324,8 @@ Remaining, in order: **deploy to Render + Vercel** (the only assignment
 requirement not yet met - pick Render's Singapore region, next to the
 database), push to GitHub, and rotate the API keys that were shared in chat.
 
-Known thin spot: plan steps still run strictly sequentially - `executor_node`
-handles one per graph invocation. Independent research steps could fan out,
-and that is the largest remaining latency win.
+Independent plan steps now run concurrently (`_batch_from` / `_run_batch`,
+cap `agent_max_parallel_steps`=3). Live-verified on a Jaipur plan: 5 steps in
+4 waves, district research overlapping the weather forecast. The planner had
+to be *told* about `depends_on_previous` - it defaults True and the prompt
+never mentioned it, so the batch was always one step until the prompt changed.

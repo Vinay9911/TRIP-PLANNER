@@ -790,10 +790,8 @@ One measured 370-second run, from the trace tables:
 | Four steps failing on exhausted quota, then retrying | — |
 | 11 RAG hops at ~10 s each | ~114 s |
 
-The runaway is fixed (§4.5). The remaining structural cost is that plan steps
-run **strictly sequentially** — `executor_node` handles one step per graph
-invocation and the graph loops. Research steps are independent of one another
-and could fan out; that is the largest remaining win and is listed in §14.
+The runaway is fixed (§4.5), and steps no longer run strictly one at a time
+(§11.5).
 
 ### 11.3 Local models are a quota fix, not a speed fix
 
@@ -822,7 +820,45 @@ Every reply reports which providers served it, and the composer shows which is
 active. That transparency is half the point: a local reply is genuinely
 slower, and without saying so the interface simply looks broken.
 
-### 11.4 A wrong pin is worse than no pin
+### 11.4 Independent steps run together
+
+`PlanStep.depends_on_previous` existed from the first version and nothing ever
+read it, so a five-step plan meant five sequential round trips even when
+researching districts, checking the weather and finding stays needed nothing
+from one another.
+
+`executor_node` now takes a *batch*: the current step, plus each following
+step that does not depend on its predecessor, up to
+`agent_max_parallel_steps` (3). A batch costs its slowest member rather than
+the sum of its members. Measured on a real Jaipur plan, five steps execute in
+four waves, with district research and the weather forecast overlapping.
+
+Three details decide whether this is safe rather than merely fast:
+
+- **The planner has to be told.** The field defaults to `True` and the prompt
+  never mentioned it, so the model marked everything dependent and the batch
+  was always one. The prompt now asks a single question — could someone start
+  this step knowing nothing but the traveller's request? — and says to answer
+  `true` when unsure, because running something too early wastes the work
+  while running it in sequence merely costs time.
+- **`compose` never joins a batch**, guarded in code rather than trusted to
+  the model. A compose step marked independent would write the answer from
+  findings that had not arrived, producing a plausible but hollow itinerary
+  rather than an obvious failure.
+- **The trace survives concurrency.** Tool calls were attributed to steps by
+  slicing a shared list between a before and after length, which mis-files
+  every call as soon as two steps interleave. Each concurrent step now
+  records into its own list — a context variable rebound inside its task — and
+  they are merged back in *plan* order, not completion order, because the
+  trace is read by a human looking for a particular step. The per-run result
+  cache is deliberately shared across the batch, since concurrent steps about
+  one destination are the likeliest of all to ask for the same guide article.
+
+A failure in one step also cannot take down its siblings: each returns a
+`StepResult`, never an exception, so the replanner can route around a gap
+instead of the batch discarding work it already paid for.
+
+### 11.5 A wrong pin is worse than no pin
 
 Photographs and map pins were originally attached only to a completed
 itinerary — the rarest thing this agent produces, since most conversations are
@@ -908,6 +944,8 @@ than to produce a better itinerary with a longer plan.
 | 17 | Ollama fallback on daily exhaustion | Failing the turn | A spent daily budget is the one failure a second key cannot fix |
 | 18 | An absent API key selects the local provider | A separate flag | Nothing to pool or rotate; one signal instead of two to keep in sync |
 | 19 | Reading the geocoder's `match_type` | Distance check alone | The city-fallback match sits 0 km from the search point and no distance test can see it |
+| 20 | Batching independent steps in the executor | LangGraph `Send` fan-out | Keeps the replan loop intact; the concurrency is three tasks, not a graph rewrite |
+| 21 | Per-step tool recorders, merged in plan order | One shared list | Slicing a shared list mis-attributes every call once two steps interleave |
 
 ---
 
@@ -919,19 +957,13 @@ Honest about what is thin, in priority order.
    constraint adherence, grounding and tool appropriateness. Today's evidence
    is unit tests plus manual inspection; that does not catch a regression in
    *answer quality*.
-2. **Parallel step execution.** The largest remaining latency win, and the
-   only structural one left. `executor_node` runs one step per graph
-   invocation, so a five-step plan is five sequential round trips even though
-   researching attractions, checking weather and finding stays depend on
-   nothing but the plan. `PlanStep.depends_on_previous` already exists and is
-   unused; LangGraph fans out natively.
-3. **Token streaming.** Progress is streamed (§11.1), but the answer itself
+2. **Token streaming.** Progress is streamed (§11.1), but the answer itself
    still arrives whole. Streaming the composition would make the last few
    seconds feel instant.
-4. **Semantic caching.** Two users asking about Kyoto with similar preferences
+3. **Semantic caching.** Two users asking about Kyoto with similar preferences
    repeat most of the work. Caching on an embedding of (destination +
    constraints) would cut both latency and quota use.
-5. **Stronger grounding.** The current check is a heuristic that logs rather
+4. **Stronger grounding.** The current check is a heuristic that logs rather
    than blocks. A proper claim-level verifier gating the response would be
    better, at the cost of another model call.
-6. **Real flight data**, if a budget for it existed.
+5. **Real flight data**, if a budget for it existed.

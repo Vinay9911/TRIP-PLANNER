@@ -182,6 +182,31 @@ def start_recording() -> list[ToolCallRecord]:
     return records
 
 
+def start_step_recording() -> list[ToolCallRecord]:
+    """Give the calling task its own recorder, sharing the run's result cache.
+
+    For steps running concurrently. The trace attributes tool calls to steps by
+    slicing the shared list between a before and after length, which silently
+    mis-attributes as soon as two steps interleave - "weather" would appear
+    under whichever step happened to be measured around it.
+
+    Called inside a task, `set` rebinds only that task's context, so each step
+    accumulates its own records and the caller merges them back in step order.
+
+    The result cache is deliberately *not* reset. It is a dict held in a
+    context variable, so tasks inherit the same object by reference and a guide
+    article fetched by one step is still free for its siblings - which is worth
+    more here than anywhere, since concurrent steps about one destination are
+    exactly the ones likely to ask for the same thing.
+
+    Returns:
+        The list this task will accumulate into.
+    """
+    records: list[ToolCallRecord] = []
+    _recorder.set(records)
+    return records
+
+
 def stop_recording() -> None:
     """Stop collecting tool-call records and discard the per-run result cache."""
     _recorder.set(None)

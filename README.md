@@ -471,7 +471,7 @@ The unit suite:
 
 ```bash
 cd backend
-PYTHONIOENCODING=utf-8 pytest -q                     # 222 tests
+PYTHONIOENCODING=utf-8 pytest -q                     # 229 tests
 pytest --cov=app --cov-report=term-missing
 pytest tests/unit/test_memory_consolidation.py -v    # the memory pipeline
 ```

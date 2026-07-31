@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     agent_max_plan_steps: int = Field(default=8, ge=1, le=20)
     agent_max_replan_cycles: int = Field(default=3, ge=0, le=10)
     agent_max_tool_calls_per_step: int = Field(default=4, ge=1, le=10)
+    # How many independent plan steps may run at once. Capped rather than
+    # unbounded: each concurrent step is its own tool-calling loop, and a wide
+    # fan-out on a five-step plan would open more sockets and burn more of the
+    # per-minute token allowance in one burst than it saves in wall clock.
+    # Three covers the research steps that are actually independent.
+    agent_max_parallel_steps: int = Field(default=3, ge=1, le=8)
     agent_step_timeout_seconds: int = Field(default=90, ge=10)
 
     # -- RAG --------------------------------------------------------------
