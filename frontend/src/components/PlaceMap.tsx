@@ -81,6 +81,7 @@ export function PlaceMap({
   // the module itself is still loaded on demand further down.
   const map = useRef<LeafletNamespace.Map | null>(null);
   const markers = useRef<Map<number, LeafletNamespace.Marker>>(new Map());
+  const route = useRef<LeafletNamespace.Polyline | null>(null);
   const leaflet = useRef<typeof LeafletNamespace | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -149,6 +150,26 @@ export function PlaceMap({
         });
 
         markers.current.set(item.index, marker);
+      }
+
+      // A dashed line through the stops in order. Pins alone say where the
+      // places are; the line says what the day actually looks like - three
+      // stops in a row and one across town read very differently, and that is
+      // the thing worth noticing before the trip rather than during it.
+      route.current?.remove();
+      if (points.length > 1) {
+        route.current = L.polyline(
+          points.map((p) => [p.latitude!, p.longitude!] as [number, number]),
+          {
+            color: "#e85d2c",
+            weight: 2,
+            opacity: 0.55,
+            dashArray: "5 7",
+            // Under the markers: the line is context, the pins are the
+            // things being pointed at.
+            interactive: false,
+          },
+        ).addTo(map.current);
       }
 
       const bounds = L.latLngBounds(

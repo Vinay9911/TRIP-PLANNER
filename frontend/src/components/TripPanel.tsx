@@ -23,7 +23,7 @@
  * their own colour, every time.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   IconBed,
@@ -35,7 +35,7 @@ import {
   IconUsers,
   IconWallet,
 } from "@/components/icons";
-import { PlaceMap, type MappedItem } from "@/components/PlaceMap";
+import { PlaceMap, dayColor, type MappedItem } from "@/components/PlaceMap";
 import { PlacePhoto } from "@/components/PlacePhoto";
 import type { ChatResponse, TripFact, TripState } from "@/lib/api";
 
@@ -55,6 +55,7 @@ function Panel({
   state,
   hint,
   fact,
+  action,
   children,
 }: {
   title: string;
@@ -62,6 +63,7 @@ function Panel({
   state: PanelState;
   hint: string;
   fact?: TripFact;
+  action?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
@@ -69,6 +71,7 @@ function Panel({
       <header className="flex items-center gap-2 px-3 py-2.5">
         <span className="text-[var(--color-brand)]">{icon}</span>
         <h3 className="flex-1 font-display text-xs font-semibold">{title}</h3>
+        {action}
         {fact && <ProvenanceChip fact={fact} />}
       </header>
 
@@ -375,20 +378,128 @@ function FlightsPanel({ fact, busy }: { fact?: TripFact; busy: boolean }) {
 }
 
 function MapPanel({ pins, busy }: { pins: MappedItem[]; busy: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const [active, setActive] = useState<number | null>(null);
   const state: PanelState = pins.length > 0 ? "ready" : busy ? "loading" : "empty";
+
   return (
-    <Panel
-      title={pins.length > 0 ? `Map · ${pins.length} pins` : "Map"}
-      icon={<IconPin size="1em" />}
-      state={state}
-      hint="Places get pinned here as soon as the agent names some."
+    <>
+      <Panel
+        title={pins.length > 0 ? `Map · ${pins.length} stops` : "Map"}
+        icon={<IconPin size="1em" />}
+        state={state}
+        hint="Places get pinned here as soon as the agent names some."
+        action={
+          pins.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="rounded-full border border-[var(--color-line-strong)] px-2 py-0.5 text-[10px] font-medium transition-colors duration-200 hover:border-[var(--color-brand)] hover:text-[var(--color-brand-strong)]"
+            >
+              Expand
+            </button>
+          ) : undefined
+        }
+      >
+        <PlaceMap
+          items={pins}
+          activeIndex={active}
+          onHoverItem={setActive}
+          className="h-52 rounded-xl"
+        />
+        <p className="mt-1.5 text-[10px] leading-relaxed text-[var(--color-ink-faint)]">
+          Numbered in visiting order and joined by a dashed line. Only places
+          that resolved confidently are pinned — a missing pin is deliberate,
+          not a failure.
+        </p>
+      </Panel>
+
+      {expanded && <ExpandedMap pins={pins} onClose={() => setExpanded(false)} />}
+    </>
+  );
+}
+
+/**
+ * The whole map, full screen, with the stop list beside it.
+ *
+ * A 200px panel is enough to see that stops cluster; it is not enough to read
+ * a route. Rather than making the panel taller and pushing the rest of the
+ * trip off screen, the detail lives behind one control.
+ */
+function ExpandedMap({ pins, onClose }: { pins: MappedItem[]; onClose: () => void }) {
+  const [active, setActive] = useState<number | null>(null);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Trip map"
+      className="fade-in fixed inset-0 z-50 flex flex-col bg-[var(--color-paper)] p-3 sm:p-5"
     >
-      <PlaceMap items={pins} className="h-52 rounded-xl" />
-      <p className="mt-1.5 text-[10px] text-[var(--color-ink-faint)]">
-        Only places that resolved confidently are pinned — a missing pin is
-        deliberate, not a failure.
-      </p>
-    </Panel>
+      <header className="flex items-center gap-3 pb-3">
+        <h2 className="flex-1 font-display text-base font-semibold">
+          {pins.length} stops
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-xs font-medium transition-colors duration-200 hover:border-[var(--color-brand)]"
+        >
+          Close
+        </button>
+      </header>
+
+      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_16rem]">
+        <PlaceMap
+          items={pins}
+          activeIndex={active}
+          onHoverItem={setActive}
+          className="h-full min-h-[18rem] rounded-2xl"
+        />
+
+        {/* Hovering a row lifts its pin. The list is the reason to expand at
+            all: on a small panel there is nowhere to put the stop names. */}
+        <ol className="hidden min-h-0 overflow-y-auto rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] p-2 lg:block">
+          {pins.map((pin) => (
+            <li key={pin.index}>
+              <button
+                type="button"
+                onMouseEnter={() => setActive(pin.index)}
+                onMouseLeave={() => setActive(null)}
+                className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left transition-colors duration-150 ${
+                  active === pin.index
+                    ? "bg-[var(--color-brand-soft)]"
+                    : "hover:bg-[var(--color-surface-2)]"
+                }`}
+              >
+                <span
+                  className="grid size-5 shrink-0 place-items-center rounded-full text-[10px] font-semibold text-white"
+                  style={{ background: dayColor(pin.dayNumber) }}
+                >
+                  {pin.index}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium">
+                  {pin.name}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
   );
 }
 

@@ -27,6 +27,7 @@ export function PlacePhoto({
   longitude,
   kind,
   className = "",
+  eager = false,
 }: {
   name: string;
   destination: string;
@@ -34,6 +35,11 @@ export function PlacePhoto({
   longitude: number | null;
   kind: string;
   className?: string;
+  /** Skip the viewport wait. For anything opened deliberately - a lightbox -
+   *  where the observer's "is it near the viewport" question has already been
+   *  answered by the user clicking on it, and waiting on it just makes the
+   *  panel appear empty for a beat. */
+  eager?: boolean;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [representative, setRepresentative] = useState(false);
@@ -45,22 +51,32 @@ export function PlacePhoto({
     if (!node) return;
 
     let cancelled = false;
+
+    const fetchNow = () =>
+      api
+        .placeImage({ name, destination, latitude, longitude, kind })
+        .then((image) => {
+          if (cancelled) return;
+          setUrl(image.url);
+          setRepresentative(image.is_representative);
+        })
+        .catch(() => {
+          if (!cancelled) setFailed(true);
+        });
+
+    if (eager) {
+      void fetchNow();
+      return () => {
+        cancelled = true;
+      };
+    }
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries[0]?.isIntersecting) return;
         observer.disconnect();
-        api
-          .placeImage({ name, destination, latitude, longitude, kind })
-          .then((image) => {
-            if (cancelled) return;
-            setUrl(image.url);
-            setRepresentative(image.is_representative);
-          })
-          .catch(() => {
-            // A missing photo is a cosmetic loss - leave the space blank
-            // rather than surfacing an error next to a perfectly good plan.
-            if (!cancelled) setFailed(true);
-          });
+        // A missing photo is a cosmetic loss - leave the space blank rather
+        // than surfacing an error next to a perfectly good plan.
+        void fetchNow();
       },
       { rootMargin: "200px" },
     );
@@ -70,7 +86,7 @@ export function PlacePhoto({
       cancelled = true;
       observer.disconnect();
     };
-  }, [name, destination, latitude, longitude, kind]);
+  }, [name, destination, latitude, longitude, kind, eager]);
 
   if (failed) return null;
 

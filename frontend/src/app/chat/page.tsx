@@ -458,15 +458,20 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
         <div ref={endRef} />
       </div>
 
-      <div className="sticky bottom-0 space-y-2.5 bg-gradient-to-t from-[var(--color-paper)] via-[var(--color-paper)] to-transparent pb-5 pt-3">
+      {/* One row of controls, not four stacked ones.
+          `TripBar` used to repeat the destination and dates here; the trip
+          panel now says all of that and does not scroll, so keeping it was
+          duplicating the answer directly above the question. What is left is
+          only the things that change what the *next* message does. On mobile
+          the drawer stands in for the panel, so it stays. */}
+      <div className="sticky bottom-0 space-y-2 bg-gradient-to-t from-[var(--color-paper)] via-[var(--color-paper)] to-transparent pb-4 pt-3">
         <TripPanelDrawer trip={trip} facts={facts} pins={pins} busy={busy} />
-        <TripBar trip={trip} />
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <IncludeControl focus={focus} onToggle={toggleService} />
           <EngineControl localOnly={localOnly} onToggle={() => setLocalOnly((on) => !on)} />
+          <TripDetailsPicker onInsert={insertPrompt} />
         </div>
-        <TripDetailsPicker onInsert={insertPrompt} />
 
         <form
           onSubmit={(event) => {
@@ -622,51 +627,6 @@ function Welcome({
  * grows as the conversation fills the trip in - a progress indicator that is
  * also an honesty check on what the agent claims to know.
  */
-function TripBar({ trip }: { trip: TripState }) {
-  const chips: { icon: React.ReactNode; text: string }[] = [];
-  if (trip.destination) chips.push({ icon: <IconPin size="0.95em" />, text: trip.destination });
-  if (trip.duration_days)
-    chips.push({ icon: <IconCalendar size="0.95em" />, text: `${trip.duration_days} days` });
-  if (trip.start_date)
-    chips.push({
-      icon: <IconClock size="0.95em" />,
-      text: `${trip.start_date}${trip.end_date ? ` → ${trip.end_date}` : ""}`,
-    });
-  else if (trip.travel_window)
-    chips.push({ icon: <IconClock size="0.95em" />, text: trip.travel_window });
-  if (trip.origin) chips.push({ icon: <IconPlane size="0.95em" />, text: `from ${trip.origin}` });
-  if (trip.party) chips.push({ icon: <IconUsers size="0.95em" />, text: trip.party });
-  if (trip.budget_tier)
-    chips.push({ icon: <IconWallet size="0.95em" />, text: trip.budget_tier });
-  if (trip.priorities?.length)
-    chips.push({ icon: <IconSparkle size="0.95em" />, text: trip.priorities.join(", ") });
-
-  if (chips.length === 0) return null;
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)]/80 px-3 py-2 text-xs backdrop-blur">
-      {trip.destination && (
-        <DecorativeArt
-          name={trip.destination}
-          width={48}
-          height={48}
-          className="h-6 w-6 rounded-full"
-        />
-      )}
-      <span className="font-medium text-[var(--color-ink-soft)]">Your trip</span>
-      {chips.map((chip) => (
-        <span
-          key={chip.text}
-          className="inline-flex items-center gap-1 rounded-full bg-[var(--color-brand-soft)] px-2.5 py-1 text-[var(--color-brand-strong)]"
-        >
-          {chip.icon}
-          {chip.text}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function Message({
   turn,
   onPickOption,
@@ -1009,108 +969,52 @@ function OptionGallery({
   destination: string;
   onPick: (text: string) => void;
 }) {
-  const [showMap, setShowMap] = useState(true);
   const [zoomed, setZoomed] = useState<{
     name: string;
     place?: { name: string; latitude: number; longitude: number };
   } | null>(null);
-  const onZoom = setZoomed;
+
   const byName = new Map(places.map((place) => [place.name, place]));
-
-  // Only pinned options are numbered - a number beside a card with no pin
-  // would point at nothing on the map.
-  const pinned = options.filter((option) => byName.has(option));
-  const numberOf = new Map(pinned.map((name, index) => [name, index + 1]));
-
-  const mapped: MappedItem[] = pinned.map((name, index) => ({
-    name,
-    kind: "neighbourhood",
-    district: null,
-    description: "",
-    latitude: byName.get(name)!.latitude,
-    longitude: byName.get(name)!.longitude,
-    approx_duration: null,
-    booking_note: null,
-    index: index + 1,
-    dayNumber: 1,
-  }));
+  const numberOf = new Map(
+    options.filter((option) => byName.has(option)).map((name, index) => [name, index + 1]),
+  );
 
   return (
     <div className="mt-3 space-y-2.5">
-      {mapped.length > 0 && (
-        <>
-          <button
-            type="button"
-            onClick={() => setShowMap((value) => !value)}
-            aria-expanded={showMap}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-3 text-xs font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
-          >
-            <IconPin size="0.95em" />
-            {showMap ? "Hide map" : `Show on map (${mapped.length})`}
-          </button>
-
-          <div
-            className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-              showMap ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-            }`}
-          >
-            <div className="overflow-hidden">
-              {showMap && <PlaceMap items={mapped} className="h-56 sm:h-64" />}
-            </div>
-          </div>
-        </>
-      )}
-
+      {/* No map here. It lives in the trip panel, which does not scroll away -
+          two maps of the same places, one of them disappearing upward as the
+          conversation grows, was worse than either alone. */}
       <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
         {/* Staggered 45ms apart: enough that the eye reads the gallery
             assembling as a sequence, short enough that the last card has
             landed before anyone is waiting on it. */}
-        {options.map((option, position) => {
-          const place = byName.get(option);
-          return (
-            <div
-              key={option}
-              style={{ animationDelay: `${position * 45}ms` }}
-              className="rise-in group overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] transition-[border-color,box-shadow] duration-200 hover:border-[var(--color-brand)] hover:shadow-[0_12px_28px_-20px_rgb(44_31_43_/_0.55)]"
-            >
-              {/* Looking and choosing are different intentions and now have
-                  different targets. Tapping a photograph used to send "Let's
-                  do Lucknow", which committed the whole trip to one city when
-                  all the traveller wanted was a closer look at the picture. */}
-              <button
-                type="button"
-                onClick={() => onZoom({ name: option, place })}
-                aria-label={`See ${option}`}
-                className="relative block h-28 w-full overflow-hidden"
-              >
-                <PlacePhoto
-                  name={option}
-                  destination={destination}
-                  latitude={place?.latitude ?? null}
-                  longitude={place?.longitude ?? null}
-                  kind="neighbourhood"
-                  className="h-28 w-full transition-transform duration-500 group-hover:scale-105"
-                />
-                {numberOf.has(option) && (
-                  <span className="absolute left-2 top-2 grid size-5 place-items-center rounded-full bg-[var(--color-brand-strong)] text-[10px] font-semibold text-white">
-                    {numberOf.get(option)}
-                  </span>
-                )}
-              </button>
-
-              <div className="flex items-center justify-between gap-2 px-3 py-2">
-                <span className="truncate text-xs font-medium">{option}</span>
-                <button
-                  type="button"
-                  onClick={() => onPick(`Let's do ${option}`)}
-                  className="shrink-0 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
-                >
-                  Choose
-                </button>
-              </div>
-            </div>
-          );
-        })}
+        {options.map((option, position) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => setZoomed({ name: option, place: byName.get(option) })}
+            aria-label={`See ${option}`}
+            style={{ animationDelay: `${position * 45}ms` }}
+            className="rise-in group overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] text-left transition-[border-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)] hover:shadow-[0_12px_28px_-20px_rgb(44_31_43_/_0.55)]"
+          >
+            <span className="relative block h-28 w-full overflow-hidden">
+              <PlacePhoto
+                name={option}
+                destination={destination}
+                latitude={byName.get(option)?.latitude ?? null}
+                longitude={byName.get(option)?.longitude ?? null}
+                kind="neighbourhood"
+                className="h-28 w-full rounded-none transition-transform duration-500 group-hover:scale-105"
+              />
+              {numberOf.has(option) && (
+                <span className="absolute left-2 top-2 grid size-5 place-items-center rounded-full bg-[var(--color-brand-strong)] text-[10px] font-semibold text-white">
+                  {numberOf.get(option)}
+                </span>
+              )}
+            </span>
+            <span className="block truncate px-3 py-2 text-xs font-medium">{option}</span>
+          </button>
+        ))}
       </div>
 
       {zoomed && (
@@ -1121,7 +1025,9 @@ function OptionGallery({
           onClose={() => setZoomed(null)}
           onPick={() => {
             setZoomed(null);
-            onPick(`Let's do ${zoomed.name}`);
+            onPick(
+              `Let's focus on ${zoomed.name}. Plan that specifically.`,
+            );
           }}
         />
       )}
@@ -1155,7 +1061,17 @@ function PlaceLightbox({
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+
+    // The page behind must not scroll under the dialog. Without this the
+    // backdrop stays put while the content slides, which is the "glitchy"
+    // part - the two layers visibly disagree about where the page is.
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+    };
   }, [onClose]);
 
   return (
@@ -1176,7 +1092,8 @@ function PlaceLightbox({
           latitude={place?.latitude ?? null}
           longitude={place?.longitude ?? null}
           kind="neighbourhood"
-          className="h-64 w-full rounded-none"
+          eager
+          className="h-64 w-full rounded-none sm:h-80"
         />
         <div className="flex items-center justify-between gap-3 p-4">
           <div className="min-w-0">
@@ -1189,7 +1106,7 @@ function PlaceLightbox({
             <Button variant="ghost" onClick={onClose}>
               Close
             </Button>
-            <Button onClick={onPick}>Plan this</Button>
+            <Button onClick={onPick}>Plan just this</Button>
           </div>
         </div>
       </div>

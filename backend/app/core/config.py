@@ -68,15 +68,29 @@ class Settings(BaseSettings):
     # Groq and falls back to Ollama once the daily token budget is spent,
     # which is the only failure a second cloud key cannot fix.
     #
-    # Model choice here is measured, not assumed. On a 4GB laptop GPU
-    # `llama3.2:3b` ran at 47.8 tok/s and emitted correct tool calls;
-    # `llama3.1:8b` was correct but 6x slower because it does not fit in
-    # VRAM; `qwen3:4b` produced no tool calls at all and is unusable as an
-    # executor whatever its other merits.
+    # Model choice here is measured, not assumed - and the two jobs want
+    # different models, which is why these are not all the same.
+    #
+    # `llama3.2:3b` calls tools correctly and fast (47.8 tok/s on a 4GB laptop
+    # GPU, where it fits entirely). It cannot fill this project's larger
+    # schemas: asked to extract "how about manali" into `Understanding`, it
+    # returned destination=None and put "Manali" into the clarifying-question
+    # field, so the agent lost the destination and asked where to go.
+    #
+    # `llama3.1:8b` fills the same schema correctly and takes 28s to do it,
+    # because it spills out of VRAM. That is the right trade for the planner
+    # role - a wrong extraction ruins the whole turn, while a slow one only
+    # costs time, and local is a quota fallback rather than a speed option.
+    #
+    # `qwen3:4b` emitted no tool calls at all and is unusable as an executor
+    # whatever its other merits.
     llm_provider: Literal["groq", "local", "auto"] = "auto"
     ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_planner_model: str = "llama3.2:3b"
+    #: Understanding, planning and replanning - all structured output.
+    ollama_planner_model: str = "llama3.1:8b"
+    #: Tool calling, where the small model is both correct and much faster.
     ollama_executor_model: str = "llama3.2:3b"
+    #: Short extractions against small schemas; the 3B is fine for these.
     ollama_utility_model: str = "llama3.2:3b"
 
     # -- Embeddings (Gemini) ----------------------------------------------

@@ -102,6 +102,28 @@ def distance_km(first: tuple[float, float], second: tuple[float, float]) -> floa
 async def geocode_place(place: str, *, settings: Settings | None = None) -> dict[str, Any] | None:
     """Resolve a place name to coordinates and a timezone.
 
+    **Geoapify is asked first, and this is a correctness fix rather than a
+    preference.** Open-Meteo's gazetteer is wrong for exactly the destinations
+    travellers ask about, and wrong *silently* - it answers confidently with
+    somewhere else. Measured against the live API:
+
+    ==================  =============================  ==================
+    Asked for           Open-Meteo answered            Actually
+    ==================  =============================  ==================
+    ``Goa``             44.40, 8.94 - **Italy**        15.30, 74.09
+    ``Manali``          13.17, 80.27 - a Chennai       32.25, 77.19
+                        suburb
+    ``Uttar Pradesh``   nothing at all                 27.13, 80.86
+    ``Coorg``           nothing at all                 12.38, 75.66
+    ==================  =============================  ==================
+
+    Every one of those became a weather forecast for the wrong place,
+    presented as if it were the right one - a forecast for Italy is not
+    obviously wrong to someone who asked about Goa. Geoapify resolves all four
+    correctly, and returns the country and timezone this needs as well.
+
+    Open-Meteo remains the fallback, for when no Geoapify key is configured.
+
     Args:
         place: A city or place name, e.g. `"Kyoto"` or `"Kyoto, Japan"`.
         settings: Settings override, for tests.
@@ -114,6 +136,10 @@ async def geocode_place(place: str, *, settings: Settings | None = None) -> dict
         ExternalServiceError: If the geocoding service is unreachable.
     """
     cfg = settings or get_settings()
+
+    resolved = await _geocode_place_geoapify(place, cfg)
+    if resolved is not None:
+        return resolved
 
     # Open-Meteo's geocoder matches on the bare city name; a "City, Country"
     # string returns nothing. Splitting on the comma and searching for the
@@ -158,6 +184,57 @@ async def geocode_place(place: str, *, settings: Settings | None = None) -> dict
         "timezone": top.get("timezone"),
         "population": top.get("population"),
     }
+
+
+async def _geocode_place_geoapify(place: str, cfg: Settings) -> dict[str, Any] | None:
+    """Resolve a place through Geoapify, in `geocode_place`'s shape.
+
+    Args:
+        place: The place name.
+        cfg: Application settings.
+
+    Returns:
+        The same dict `geocode_place` returns, or None to fall through to
+        Open-Meteo - no key, no match, or an unreachable service. Never
+        raises: a failure here must degrade to the other geocoder rather than
+        fail the weather tool outright.
+    """
+    key = cfg.geoapify_api_key.get_secret_value()
+    if not key:
+        return None
+
+    try:
+        payload = await request_json(
+            "GET",
+            "https://api.geoapify.com/v1/geocode/search",
+            service="geoapify-geocode",
+            params={"text": place, "limit": "5", "apiKey": key},
+        )
+    except Exception:  # noqa: BLE001 - see the docstring; falls through
+        logger.info("geocoding.place_geoapify_failed", place=place)
+        return None
+
+    for feature in payload.get("features") or []:
+        properties = feature.get("properties") or {}
+        # Same filter as `geocode_centre`: a weather forecast wants a
+        # settlement or region, not a restaurant that happens to share a name.
+        if properties.get("result_type") not in _CENTRE_RESULT_TYPES:
+            continue
+        latitude, longitude = properties.get("lat"), properties.get("lon")
+        if latitude is None or longitude is None:
+            continue
+
+        return {
+            "name": properties.get("city") or properties.get("name") or place,
+            "country": properties.get("country"),
+            "region": properties.get("state"),
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+            "timezone": (properties.get("timezone") or {}).get("name"),
+            "population": properties.get("population"),
+        }
+
+    return None
 
 
 async def geocode_centre(

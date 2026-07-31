@@ -34,7 +34,7 @@ import {
   IconSparkle,
   IconTicket,
 } from "@/components/icons";
-import { PlaceMap, dayColor, type MappedItem } from "@/components/PlaceMap";
+import { dayColor, type MappedItem } from "@/components/PlaceMap";
 import { PlacePhoto } from "@/components/PlacePhoto";
 import { Badge, Card } from "@/components/ui";
 import { api, type Itinerary, type ItineraryDay, type ItineraryItem } from "@/lib/api";
@@ -234,10 +234,6 @@ function Day({
 
 export function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
   const destination = itinerary.destination;
-  // Open by default. Hidden-by-default lost the feature entirely: the map is
-  // the most useful thing on the screen for judging whether a plan makes
-  // geographic sense, and behind a button nobody found it.
-  const [showMap, setShowMap] = useState(true);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   // Number every stop once across the whole trip, so a marker's label matches
@@ -259,39 +255,11 @@ export function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
 
   return (
     <div className="space-y-2.5">
-      {mappable.length > 0 && (
-        <div className="flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => setShowMap((value) => !value)}
-            aria-expanded={showMap}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-3 text-xs font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
-          >
-            <IconPin size="0.95em" />
-            {showMap ? "Hide map" : `Show map (${mappable.length} stops)`}
-          </button>
-        </div>
-      )}
-
-      {/* Grid-rows transition rather than max-height: it animates to the
-          content's real height, so a long plan does not clip and a short one
-          does not leave a gap. */}
-      <div
-        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-          showMap ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-        }`}
-      >
-        <div className="overflow-hidden">
-          {showMap && (
-            <PlaceMap
-              items={mappable}
-              activeIndex={activeIndex}
-              onHoverItem={setActiveIndex}
-              className="h-72 sm:h-80"
-            />
-          )}
-        </div>
-      </div>
+      {/* The map moved to the trip panel, which stays put while the
+          conversation grows. A second copy here scrolled away exactly when it
+          became useful, and two maps of the same stops disagreed about which
+          one to interact with. Numbering on the cards still refers to the
+          panel's pins. */}
       {itinerary.intro && (
         <Card className="flex gap-3 overflow-hidden">
           <PlacePhoto
