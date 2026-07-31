@@ -224,6 +224,25 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
   the whole call, so a 322-character `reasoning` string burned an entire
   planner call (1,103 in, 886 out) before the retry. Constrain a field only
   where the constraint earns more than a wasted call costs.
+- **Two components could be imported as "the place image", and only one
+  fetched a photograph.** `ui.tsx` served a random picsum shot seeded on the
+  name, so a card labelled Lucknow showed a cactus. Naming was the whole bug:
+  `PlacePhoto` is the real one, `DecorativeArt` is filler. If it says photo,
+  it is one.
+- **Accommodation must skip the Wikipedia tier.** Hotels have no article, but
+  the search still *matches* on the city half of the name - "Lucknow 4-star
+  hotel" returned a photograph of Hazratganj Market, which would then be
+  captioned as that hotel and marked genuine. Also map `ItemKind` to
+  photographic words (`_PHOTO_KEYWORD`): a library indexes "hotel", not "stay".
+- **`simulated` is derived from the payload's own `source`, never a list.**
+  Flight and hotel data is generated, and a made-up price rendered like a
+  measured forecast is the worst thing this UI can do. Reading the payload
+  means swapping in a real provider flips the badge and nothing else.
+- **Anything read from a ContextVar must be read before its `stop_*` call.**
+  `llm_providers` was empty on every reply for days because
+  `active_providers()` ran after `stop_metering()`. `rag_hops` already carried
+  this warning; the fix is to read from the object the runner holds
+  (`meter.provider_list()`) rather than the binding.
 - **Progress must be free when nobody is listening.** `services/progress.py`
   is a no-op with no channel open, and drops on a full queue rather than
   blocking. The plain `/chat` endpoint opens no channel, so every emit on that
@@ -259,6 +278,15 @@ frontend/src/
   lib/        api (typed client), supabase
 ```
 
+**The chat is two columns.** Conversation left, `TripPanel` right - trip
+summary, map, weather, stays, flights. A transcript is chronological, so
+anything describing the *state* of the trip scrolled away the moment the
+traveller replied. Facts accumulate across turns (asking about weather must
+not blank the hotels) and every panel has three visible states: empty with a
+line saying what to ask for, loading, or filled with a provenance badge. A
+panel that renders nothing when it knows nothing is indistinguishable from a
+broken one. Below `lg` it collapses into a drawer above the composer.
+
 **One shell, every page.** `AppShell` renders the sidebar — new chat, nav,
 conversation history, account actions — and every page supplies only its own
 content. Per-page headers were why the layout appeared to jump between tabs.
@@ -287,7 +315,7 @@ Destination photos are seeded placeholders, labelled as illustrative.
 
 ## Status
 
-Backend and frontend complete, 229 tests passing. Verified end-to-end against
+Backend and frontend complete, 238 tests passing. Verified end-to-end against
 live Supabase, Groq, Gemini, Tavily, Geoapify and Wikivoyage: planning, dynamic
 tool selection, multi-hop RAG, memory extraction and cross-session recall,
 clarification, Japanese replies, and the admin trace all confirmed working.

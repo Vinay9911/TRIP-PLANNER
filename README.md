@@ -125,6 +125,18 @@ correct tool calls; `llama3.1:8b` is equally correct but six times slower
 because it does not fit in VRAM; `qwen3:4b` produces no tool calls at all and
 cannot drive the executor. Local is a quota fix, not a speed fix.
 
+### Says where every number came from
+
+The trip panel beside the conversation shows the map, weather, stays and
+flights as they are found. Each panel carries its source, and the ones backed
+by the mock provider are badged **Simulated** in their own colour — because a
+generated hotel price rendered like a measured forecast is the most
+misleading thing a travel app can put on a screen. Swap in a real provider and
+the badge changes itself; it reads the payload rather than a list.
+
+Panels also say when they are empty: *"Ask about hotels and they appear here"*
+beats rendering nothing, which looks identical to being broken.
+
 ### Puts places on a map, with photographs
 
 Both appear in ordinary conversation, not only in a finished itinerary — most
@@ -471,7 +483,7 @@ The unit suite:
 
 ```bash
 cd backend
-PYTHONIOENCODING=utf-8 pytest -q                     # 229 tests
+PYTHONIOENCODING=utf-8 pytest -q                     # 238 tests
 pytest --cov=app --cov-report=term-missing
 pytest tests/unit/test_memory_consolidation.py -v    # the memory pipeline
 ```
