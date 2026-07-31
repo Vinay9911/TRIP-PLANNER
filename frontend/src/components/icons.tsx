@@ -203,6 +203,20 @@ export const IconInfo = (p: IconProps) => (
   </Icon>
 );
 
+export const IconMic = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8" />
+  </Icon>
+);
+
+export const IconCopy = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="8" y="8" width="12" height="12" rx="2" />
+    <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+  </Icon>
+);
+
 /** Maps a service id to its icon, so the composer and cards stay in step. */
 export const SERVICE_ICONS = {
   flights: IconPlane,

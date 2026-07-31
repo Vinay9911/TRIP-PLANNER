@@ -21,6 +21,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { useCallback } from "react";
 
 import {
   IconBed,
@@ -36,8 +37,9 @@ import {
 } from "@/components/icons";
 import { dayColor, type MappedItem } from "@/components/PlaceMap";
 import { PlacePhoto } from "@/components/PlacePhoto";
-import { Badge, Card } from "@/components/ui";
+import { Badge, Button, Card } from "@/components/ui";
 import { api, type Itinerary, type ItineraryDay, type ItineraryItem } from "@/lib/api";
+import { IconCopy } from "@/components/icons";
 
 const KIND_ICON = {
   sight: IconTicket,
@@ -260,6 +262,7 @@ export function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
           became useful, and two maps of the same stops disagreed about which
           one to interact with. Numbering on the cards still refers to the
           panel's pins. */}
+      <CopyItineraryButton itinerary={itinerary} />
       {itinerary.intro && (
         <Card className="flex gap-3 overflow-hidden">
           <PlacePhoto
@@ -330,6 +333,67 @@ export function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
         marked <span className="font-medium">similar</span> show somewhere comparable
         rather than that exact spot.
       </p>
+    </div>
+  );
+}
+
+function CopyItineraryButton({ itinerary }: { itinerary: Itinerary }) {
+  const [copied, setCopied] = useState(false);
+
+  const copyToClipboard = useCallback(() => {
+    const lines: string[] = [];
+    lines.push(`Trip to ${itinerary.destination}`);
+    lines.push(`Duration: ${itinerary.days.length} days`);
+    if (itinerary.intro) {
+      lines.push("");
+      lines.push(itinerary.intro);
+    }
+
+    itinerary.days.forEach((day) => {
+      lines.push("");
+      lines.push(`--- Day ${day.day_number}: ${day.title} ---`);
+      if (day.date) lines.push(`Date: ${day.date}`);
+      
+      const parts = [
+        { label: "Morning", items: day.morning },
+        { label: "Afternoon", items: day.afternoon },
+        { label: "Evening", items: day.evening },
+        { label: "All Day", items: day.all_day },
+      ];
+
+      parts.forEach((part) => {
+        if (part.items && part.items.length > 0) {
+          lines.push(`\n[${part.label}]`);
+          part.items.forEach((item) => {
+            lines.push(`• ${item.name}`);
+            if (item.description) lines.push(`  ${item.description}`);
+            if (item.approx_duration) lines.push(`  Time: ${item.approx_duration}`);
+          });
+        }
+      });
+    });
+
+    if (itinerary.practical_notes.length > 0) {
+      lines.push("\n--- Practical Notes ---");
+      itinerary.practical_notes.forEach((note) => lines.push(`• ${note}`));
+    }
+
+    navigator.clipboard.writeText(lines.join("\n")).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [itinerary]);
+
+  return (
+    <div className="flex justify-end pb-2">
+      <Button
+        type="button"
+        onClick={copyToClipboard}
+        className="flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 text-xs font-medium transition-colors hover:border-[var(--color-brand)] hover:text-[var(--color-brand)]"
+      >
+        <IconCopy size="1em" />
+        {copied ? "Copied!" : "Copy Itinerary"}
+      </Button>
     </div>
   );
 }

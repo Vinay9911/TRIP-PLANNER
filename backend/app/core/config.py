@@ -88,8 +88,8 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     #: Understanding, planning and replanning - all structured output.
     ollama_planner_model: str = "llama3.1:8b"
-    #: Tool calling, where the small model is both correct and much faster.
-    ollama_executor_model: str = "llama3.2:3b"
+    #: Tool calling and chat conversations, prioritizing quality over speed.
+    ollama_executor_model: str = "llama3.1:8b"
     #: Short extractions against small schemas; the 3B is fine for these.
     ollama_utility_model: str = "llama3.2:3b"
 

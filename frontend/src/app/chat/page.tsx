@@ -43,6 +43,7 @@ import {
   IconCompass,
   IconFork,
   IconInfo,
+  IconMic,
   IconPin,
   IconPlane,
   IconSend,
@@ -142,7 +143,7 @@ const EXAMPLES = [
   "I want to go to Kerala",
   "Plan me 2 relaxed days in Kyoto. I'm vegetarian.",
   "Will I need an umbrella in Singapore next week?",
-  "京都で2日間の旅程を立ててください",
+  "मुझे 3 दिन का गोवा का प्लान बनाओ (Hindi — try any language!)",
 ];
 
 export default function ChatPage() {
@@ -474,7 +475,6 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
         />
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <IncludeControl focus={focus} onToggle={toggleService} />
           <EngineControl localOnly={localOnly} onToggle={() => setLocalOnly((on) => !on)} />
           <TripDetailsPicker onInsert={insertPrompt} />
         </div>
@@ -507,6 +507,13 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
             disabled={busy}
             className="max-h-40 min-h-11 flex-1 resize-none bg-transparent px-2 py-2.5 text-sm outline-none placeholder:text-[var(--color-ink-faint)] disabled:opacity-60"
           />
+          <VoiceInput
+            onTranscript={(text) => {
+              setInput((prev) => (prev ? `${prev.trimEnd()} ${text}` : text));
+              inputRef.current?.focus();
+            }}
+            disabled={busy}
+          />
           <Button type="submit" disabled={busy || !input.trim()} aria-label="Send message">
             <IconSend size="1.1em" />
             <span className="hidden sm:inline">Send</span>
@@ -514,7 +521,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
         </form>
 
         <p className="text-center text-[11px] text-[var(--color-ink-faint)]">
-          Flight and hotel prices are simulated. Everything else is real data.
+          ⚠️ Flight and hotel prices are <strong>simulated for demo purposes</strong>. Everything else is real data.
         </p>
       </div>
       </div>
@@ -600,11 +607,10 @@ function Welcome({
                 {capability.hint}
               </span>
               {big && (
-                <DecorativeArt
-                  name={capability.art}
-                  width={420}
-                  height={260}
-                  className="pointer-events-none mt-4 h-28 w-full rounded-xl opacity-90 transition-transform duration-300 group-hover:scale-[1.02] sm:h-36"
+                <img
+                  src="/santorini.png"
+                  alt="Build an itinerary"
+                  className="pointer-events-none mt-4 h-28 w-full object-cover rounded-xl opacity-90 transition-transform duration-300 group-hover:scale-[1.02] sm:h-36"
                 />
               )}
             </button>
@@ -663,7 +669,17 @@ function Message({
   return (
     <div className="rise-in flex justify-start">
       <div className="w-full max-w-[94%]">
-        {meta?.itinerary ? (
+        {meta?.llm_providers?.includes("local") && !meta?.llm_providers?.includes("groq") && !turn.content && (
+           <div className="mb-2 rounded-md border border-[var(--color-warning)] bg-[var(--color-warning)]/10 px-3 py-2 text-xs text-[var(--color-ink-strong)]">
+             <strong>Quota Exceeded:</strong> The cloud AI quota has run out. Falling back to the offline local AI model...
+           </div>
+        )}
+        {meta?.llm_providers?.includes("local") && meta?.llm_providers?.includes("groq") && (
+           <div className="mb-2 rounded-md border border-[var(--color-warning)] bg-[var(--color-warning)]/10 px-3 py-2 text-xs text-[var(--color-ink-strong)]">
+             <strong>Quota Exceeded:</strong> The cloud AI quota ran out mid-conversation. The rest of this response was generated using your local offline AI model.
+           </div>
+        )}
+        {meta?.itinerary && (!turn.content || turn.content.includes("### Day ") || /Day \d+/.test(turn.content) || turn.content.includes("### Good to know")) ? (
           <ItineraryView itinerary={meta.itinerary} />
         ) : (
           <Card className="px-4 py-3.5">
@@ -786,29 +802,39 @@ function EngineControl({
   onToggle: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-pressed={localOnly}
-      title={
-        localOnly
-          ? "Running on llama3.2 on this machine. Slower, no quota, nothing leaves your computer."
-          : "Running on Groq. Switches to the local model automatically if the daily quota runs out."
-      }
-      className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors duration-200 ${
-        localOnly
-          ? "border-[var(--color-grape)]/40 bg-[var(--color-grape-soft)] text-[var(--color-grape)]"
-          : "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-soft)] hover:border-[var(--color-brand)]"
-      }`}
-    >
-      <span
-        aria-hidden
-        className={`size-1.5 rounded-full ${
-          localOnly ? "bg-[var(--color-grape)]" : "bg-[var(--color-mint)]"
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-pressed={localOnly}
+        title={
+          localOnly
+            ? "Running on a local model on this machine. Slower, but no quota used."
+            : "Running on the fastest available cloud model. Falls back to local if the daily quota runs out."
+        }
+        className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors duration-200 ${
+          localOnly
+            ? "border-[var(--color-grape)]/40 bg-[var(--color-grape-soft)] text-[var(--color-grape)]"
+            : "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-soft)] hover:border-[var(--color-brand)]"
         }`}
-      />
-      {localOnly ? "Local model" : "Groq (fast)"}
-    </button>
+      >
+        <span
+          aria-hidden
+          className={`size-1.5 rounded-full ${
+            localOnly ? "bg-[var(--color-grape)]" : "bg-[var(--color-mint)]"
+          }`}
+        />
+        {localOnly ? "Local AI" : "Cloud AI"}
+      </button>
+      <button 
+        type="button" 
+        onClick={() => alert("Cloud AI uses Groq to give you the fastest, smartest results, but consumes your daily API quota.\\n\\nLocal AI runs the AI 'brain' locally on your machine, using zero API quota, but may be slower and slightly less capable.\\n\\nNote: Both modes still require internet access to fetch live weather, maps, and web search results.")}
+        className="w-8 h-8 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] flex items-center justify-center text-[var(--color-ink-soft)] hover:border-[var(--color-brand)] hover:text-[var(--color-brand)] transition-colors"
+        title="What is this?"
+      >
+        <IconInfo size="1em" />
+      </button>
+    </div>
   );
 }
 
@@ -889,7 +915,7 @@ function IncludeControl({
                       <Glyph size="1em" />
                       <span className="flex-1">{service.label}</span>
                       <span className="text-[9px] text-[var(--color-ink-faint)]">
-                        {enforced ? "enforced" : "guided"}
+                        {enforced ? "" : ""}
                       </span>
                     </button>
                   </li>
@@ -897,9 +923,7 @@ function IncludeControl({
               })}
             </ul>
             <p className="mt-2 border-t border-[var(--color-line)] pt-2 text-[10px] leading-relaxed text-[var(--color-ink-faint)]">
-              <strong>Enforced</strong> removes the tool entirely.{" "}
-              <strong>Guided</strong> shares a tool with the rest of planning, so
-              it is asked for rather than withheld.
+              Toggle services on or off. Flights and Stays are fully removed when off.
             </p>
           </div>
         </>
@@ -1366,5 +1390,82 @@ function Thinking({ progress }: { progress: ProgressEvent[] }) {
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * A microphone button that transcribes speech into text using the Web Speech API.
+ *
+ * Falls back gracefully: if the browser does not support speech recognition
+ * (Firefox, for example), the button is not rendered at all rather than showing
+ * a broken control. Chrome and Edge on desktop support it natively.
+ */
+function VoiceInput({
+  onTranscript,
+  disabled = false,
+}: {
+  onTranscript: (text: string) => void;
+  disabled?: boolean;
+}) {
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const [supported, setSupported] = useState(false);
+
+  useEffect(() => {
+    const SR =
+      typeof window !== "undefined"
+        ? (window as unknown as Record<string, unknown>).SpeechRecognition ??
+          (window as unknown as Record<string, unknown>).webkitSpeechRecognition
+        : null;
+    setSupported(!!SR);
+  }, []);
+
+  const toggle = useCallback(() => {
+    if (listening) {
+      recognitionRef.current?.stop();
+      setListening(false);
+      return;
+    }
+
+    const SR =
+      (window as unknown as Record<string, unknown>).SpeechRecognition ??
+      (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
+    if (!SR) return;
+
+    const recognition = new (SR as new () => SpeechRecognition)();
+    recognition.lang = ""; // auto-detect language
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      const transcript = event.results[0][0].transcript;
+      if (transcript.trim()) onTranscript(transcript.trim());
+    };
+
+    recognition.onend = () => setListening(false);
+    recognition.onerror = () => setListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }, [listening, onTranscript]);
+
+  if (!supported) return null;
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={disabled}
+      title={listening ? "Stop listening" : "Speak your message"}
+      aria-label={listening ? "Stop listening" : "Speak your message"}
+      className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl transition-all duration-200 ${
+        listening
+          ? "animate-pulse bg-red-500/15 text-red-500"
+          : "text-[var(--color-ink-faint)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-brand)]"
+      } disabled:opacity-50`}
+    >
+      <IconMic size="1.15em" />
+    </button>
   );
 }

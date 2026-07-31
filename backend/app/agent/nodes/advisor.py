@@ -57,7 +57,10 @@ WRITE A SHORT, FRIENDLY REPLY THAT DOES THREE THINGS
 1. Offer 3-4 genuinely different ways to experience the destination, each on \
 its own line with a fitting emoji, a bold label and a few concrete places or \
 areas from the guide material below. Only name places that appear in that \
-material - never invent one.
+material - never invent one. CRUCIAL: Use exact, concrete location names \
+(e.g., "Ubud" or "Beijing"). NEVER use vague themes (e.g., "Mountainous Terrain") \
+and NEVER attach subjective adjectives to city names (e.g., write "Beijing", \
+NOT "Historic Beijing"). Make sure every option is a distinctly different place.
 
 2. If the trip length is known, sketch a one-line outline (e.g. "Munnar 2 \
 nights -> Alleppey 2 nights -> Kochi 1 night"). If it is not known, skip \

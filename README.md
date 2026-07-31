@@ -166,6 +166,21 @@ representative rather than passed off as real.
 - **Degrades instead of failing.** A dead weather API costs you the forecast,
   not the itinerary.
 
+### Recent Enhancements
+
+- **Premium, Dynamic UI:** A completely overhauled, compact landing page with 
+  beautiful textures, dynamic text animations ("Plan your next adventure in seconds"), 
+  and highly optimized visual spacing to reduce scrolling and improve UX.
+- **Session Management:** The Dashboard and App Shell now feature a one-click 
+  **Delete Trip** capability allowing you to instantly erase old conversations 
+  and keep your trip history clean.
+- **Smart Conversational Scoping:** The agent is intelligent enough to differentiate 
+  between "rebuild my 4-day itinerary" and "recommend some places to eat", 
+  smoothly dropping into a conversational text response when appropriate instead 
+  of blindly regurgitating the itinerary widget.
+- **Polished Weather Widgets:** The weather module natively formats precise 
+  dates and days dynamically, offering a visually stunning read out of the forecast.
+
 ---
 
 ## How it works
@@ -248,7 +263,12 @@ to stay off the cloud entirely, or `groq` to disable the fallback.
 Two things worth knowing before you rely on it:
 
 - **It is slower, not faster.** Local is the answer to running out of quota,
-  not to waiting.
+  not a way to get faster replies.
+- **Model Selection:** We use `llama3.1:8b` for both planning and chatting (execution). 
+  While smaller models like `3b` are faster, they struggle to follow strict negative 
+  constraints (e.g. they invent descriptive themes instead of concrete place names, 
+  which breaks the map and image scraper). The 8B model perfectly formats places and 
+  options, ensuring your Local AI mode looks just as good as the Cloud AI mode.
 - **It cannot be deployed on a free tier.** Ollama plus a model needs
   gigabytes of RAM; Render's free instance has 512 MB. This is a
   development-machine feature. Deployments keep using Groq and Gemini.

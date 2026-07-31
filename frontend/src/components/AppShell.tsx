@@ -208,22 +208,44 @@ export function AppShell({
                       const active = activeSession === item.id;
                       return (
                         <li key={item.id}>
-                          <Link
-                            href={`/chat?session=${item.id}`}
-                            aria-current={active ? "true" : undefined}
-                            className={`flex min-h-11 flex-col justify-center rounded-lg px-3 py-1.5 text-xs transition-colors duration-200 ${
+                          <div
+                            className={`group relative flex items-center justify-between rounded-lg transition-colors duration-200 ${
                               active
                                 ? "bg-[var(--color-surface-2)] font-medium text-[var(--color-ink)]"
                                 : "text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
                             }`}
                           >
-                            <span className="truncate">{item.title || "Untitled trip"}</span>
-                            {item.destination && (
-                              <span className="truncate text-[10px] text-[var(--color-ink-faint)]">
-                                {item.destination}
-                              </span>
-                            )}
-                          </Link>
+                            <Link
+                              href={`/chat?session=${item.id}`}
+                              aria-current={active ? "true" : undefined}
+                              className="flex min-h-11 flex-1 flex-col justify-center overflow-hidden px-3 py-1.5 text-xs"
+                            >
+                              <span className="truncate">{item.title || "Untitled trip"}</span>
+                              {item.destination && (
+                                <span className="truncate text-[10px] text-[var(--color-ink-faint)]">
+                                  {item.destination}
+                                </span>
+                              )}
+                            </Link>
+                            <button
+                              onClick={async (e) => {
+                                e.preventDefault();
+                                if (window.confirm("Delete this trip?")) {
+                                  try {
+                                    await api.deleteSession(item.id);
+                                    if (active) router.push("/chat");
+                                    await loadHistory();
+                                  } catch (err) {
+                                    window.alert("Could not delete trip.");
+                                  }
+                                }
+                              }}
+                              className="mr-2 rounded p-1.5 text-[var(--color-ink-faint)] opacity-0 transition-opacity hover:bg-[var(--color-surface)] hover:text-red-500 group-hover:opacity-100"
+                              title="Delete this trip"
+                            >
+                              <IconTrash size="1.1em" />
+                            </button>
+                          </div>
                         </li>
                       );
                     })}

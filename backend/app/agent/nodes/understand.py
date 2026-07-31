@@ -203,12 +203,23 @@ city, area or district inside it, set `destination` to that narrower place. \
 "Let's do Mumbai" after discussing India means the destination is now Mumbai; \
 leaving it as India would plan the wrong trip. The same applies to picking one \
 of several options you offered ("Rugged Coastlines", "the backwaters") - if it \
-identifies a specific place, extract it. Only leave `destination` null when \
-this message genuinely does not indicate where they are going.
+identifies a specific place, extract it. 
+
+CRITICAL: A country or a broad region (e.g., "USA", "United States", "Europe", "Kerala") \
+IS a valid destination. If the traveller names a country, extract it into the \
+`destination` field. Do NOT leave `destination` null just because it is broad. \
+Only leave `destination` null when this message genuinely does not indicate \
+where they are going.
 
 Set wants_full_plan only for an explicit request or a clear acceptance of a \
-proposed outline. Set scoped_service when they want one specific thing \
-(flights, a hotel, restaurants, attractions, weather) rather than a trip.
+proposed outline. 
+
+CRITICAL: Set `scoped_service` to one of ('flights', 'stays', 'restaurants', \
+'attractions', 'weather') if the user asks for ONE specific thing (e.g. \
+"recommend places to eat" -> "restaurants"). You MUST do this EVEN IF they \
+are already in the middle of planning a full trip. If they ask for restaurants, \
+set scoped_service to 'restaurants', do NOT leave it as 'none'. Use 'none' \
+ONLY when they are discussing the trip as a whole.
 
 A flight search needs a departure city - it is meaningless without one. If \
 scoped_service is 'flights' and no origin is known (neither in this message \

@@ -79,6 +79,9 @@ RULES
   retry once with something more specific rather than the same name again.
 - Report what you actually found: specific names, places and figures. Your \
   output is the input to the next step, so a vague summary loses the work.
+- Do NOT try to verify exact future dates or specific opening hours for \
+  restaurants or attractions unless the user explicitly asks for them. Assume \
+  popular venues will be open.
 
 Do not write the final answer to the traveller. Report findings.\
 """
@@ -388,10 +391,7 @@ def _budgeted_tools(tools: list[BaseTool], *, budget: int) -> list[BaseTool]:
         async def run(**kwargs: Any) -> Any:
             nonlocal spent
             key = (base.name, json.dumps(kwargs, sort_keys=True, default=str))
-            if key in memo:
-                logger.info("agent.tool_call_deduped", tool=base.name)
-                return memo[key]
-
+            
             if spent >= budget:
                 logger.info("agent.tool_budget_spent", tool=base.name, budget=budget)
                 return (
@@ -401,6 +401,15 @@ def _budgeted_tools(tools: list[BaseTool], *, budget: int) -> list[BaseTool]:
                 )
 
             spent += 1
+            
+            if key in memo:
+                logger.info("agent.tool_call_deduped", tool=base.name)
+                return (
+                    "[SYSTEM: You already executed this exact search. The results are "
+                    "already in your memory. Do not repeat this search. Use the data "
+                    "you have or try a completely different approach.]"
+                )
+
             result = await base.ainvoke(kwargs)
             memo[key] = result
             return result

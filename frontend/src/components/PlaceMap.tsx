@@ -1,40 +1,14 @@
 "use client";
 
-/**
- * An interactive map of the places in an itinerary.
- *
- * **Why a real map and not the dotted world map.** A dotted world map is the
- * right picture for a flight - two points and an arc between them. It is the
- * wrong picture for "where am I actually going in Geneva", where the whole
- * question is whether Old Town and Pâquis are a walk apart. That needs real
- * geography, so this is Leaflet over OpenStreetMap tiles: no API key, no
- * account, and the tiles are the same ones the guide data describes.
- *
- * **Leaflet is loaded on demand.** It is ~42kb plus a stylesheet, and most
- * turns never open a map, so the import happens the first time a map is
- * actually shown rather than on every page load.
- *
- * **Markers are numbered, not pinned.** A numbered circle says "stop 3 of the
- * day" at a glance, which is the thing a traveller wants from an itinerary
- * map; a generic teardrop pin says only "something is here".
- *
- * Hovering a day card highlights its pins and vice versa - the two views are
- * the same list, so they should feel like it.
- */
-
 import { useCallback, useEffect, useRef, useState } from "react";
-
-import type * as LeafletNamespace from "leaflet";
-
 import { api, type ItineraryItem } from "@/lib/api";
+import type { Map as MapboxMap, Marker, Popup } from "mapbox-gl";
 
 export interface MappedItem extends ItineraryItem {
-  /** 1-based position across the whole trip, shown inside the marker. */
   index: number;
   dayNumber: number;
 }
 
-/** Colour per day, so a multi-day trip reads as distinct clusters. */
 const DAY_COLORS = [
   "#e85d2c",
   "#7c3aed",
@@ -50,45 +24,36 @@ export function dayColor(dayNumber: number): string {
 
 function markerHtml(item: MappedItem, active: boolean): string {
   const color = dayColor(item.dayNumber);
-  const scale = active ? 1.25 : 1;
+  const scale = active ? 1.3 : 1;
+  const shadow = active ? "0 4px 12px rgb(0 0 0 / .4)" : "0 2px 8px rgb(0 0 0 / .28)";
+  const bounceClass = active ? "marker-bounce" : "";
+  
   return `
-    <span style="
+    <span class="${bounceClass}" style="
       display:grid;place-items:center;
       width:28px;height:28px;border-radius:999px;
       background:${color};color:#fff;
       font:600 12px/1 ui-sans-serif,system-ui,sans-serif;
-      box-shadow:0 2px 8px rgb(0 0 0 / .28);
+      box-shadow:${shadow};
       border:2px solid #fff;
       transform:scale(${scale});
-      transition:transform 180ms cubic-bezier(.22,1,.36,1);
-    ">${item.index}</span>`;
+      transition:all 200ms cubic-bezier(.22,1,.36,1);
+    ">${item.index}</span>
+    <style>
+      .marker-bounce {
+        animation: bounce 0.5s ease infinite alternate;
+      }
+      @keyframes bounce {
+        from { transform: translateY(0) scale(${scale}); }
+        to { transform: translateY(-8px) scale(${scale}); }
+      }
+    </style>`;
 }
 
-/**
- * Base layers, all keyless.
- *
- * Satellite is the one people actually want for a holiday - a street map
- * tells you where the fort is, imagery tells you what it looks like from
- * above - and Esri serves it without a key or an account. Terrain earns its
- * place for anywhere mountainous, where "two hours away" and "two hours away
- * over a pass" are the same distance on a flat map.
- */
 const BASE_LAYERS = {
-  Map: {
-    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}{r}.png",
-    attribution: "© OpenStreetMap contributors",
-    maxZoom: 19,
-  },
-  Satellite: {
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
-    maxZoom: 19,
-  },
-  Terrain: {
-    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
-    attribution: "© OpenStreetMap contributors, SRTM · © OpenTopoMap",
-    maxZoom: 17,
-  },
+  Map: "mapbox://styles/mapbox/streets-v12",
+  Satellite: "mapbox://styles/mapbox/satellite-streets-v12",
+  Terrain: "mapbox://styles/mapbox/outdoors-v12",
 } as const;
 
 export type BaseLayerName = keyof typeof BASE_LAYERS;
@@ -105,102 +70,168 @@ export function PlaceMap({
   className = "",
 }: {
   items: MappedItem[];
-  /** Highlighted item, driven by hovering a day card. */
   activeIndex?: number | null;
-  /** Fly to this stop when it changes. Set by clicking a row in the list. */
   focusIndex?: number | null;
   onHoverItem?: (index: number | null) => void;
   onSelectItem?: (index: number) => void;
   layer?: BaseLayerName;
   destination?: string;
-  /** Put a photograph in the popup. Only worth the request on the big map. */
   showPhotos?: boolean;
   className?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
-  // Types come from a type-only import, so they cost nothing at runtime while
-  // the module itself is still loaded on demand further down.
-  const map = useRef<LeafletNamespace.Map | null>(null);
-  const markers = useRef<Map<number, LeafletNamespace.Marker>>(new Map());
-  const route = useRef<LeafletNamespace.Polyline | null>(null);
-  const base = useRef<LeafletNamespace.TileLayer | null>(null);
-  const leaflet = useRef<typeof LeafletNamespace | null>(null);
+  const map = useRef<MapboxMap | null>(null);
+  const markers = useRef<Map<number, Marker>>(new Map());
+  const popups = useRef<Map<number, Popup>>(new Map());
   const [ready, setReady] = useState(false);
+  const mapboxglRef = useRef<unknown>(null);
 
-  const points = items.filter(
-    (item) => item.latitude != null && item.longitude != null,
-  );
-  // Serialised so the effect re-runs when the actual coordinates change, not
-  // on every re-render that happens to rebuild the array.
-  const signature = points
-    .map((p) => `${p.index}:${p.latitude},${p.longitude}`)
-    .join("|");
+  const points = items.filter((item) => item.latitude != null && item.longitude != null);
+  const signature = points.map((p) => `${p.index}:${p.latitude},${p.longitude}`).join("|");
 
-  const handleHover = useCallback(
-    (index: number | null) => onHoverItem?.(index),
-    [onHoverItem],
-  );
+  const handleHover = useCallback((index: number | null) => onHoverItem?.(index), [onHoverItem]);
 
   useEffect(() => {
     if (!container.current || points.length === 0) return;
-
     let cancelled = false;
 
     async function boot() {
-      // Loaded here rather than at module scope: Leaflet touches `window` on
-      // import, and most conversations never open a map at all.
-      const L = (await import("leaflet")).default;
+      // Import mapbox-gl dynamically to avoid SSR issues
+      const mapboxgl = (await import("mapbox-gl")).default;
+      await import("mapbox-gl/dist/mapbox-gl.css");
       if (cancelled || !container.current) return;
-      leaflet.current = L;
+      mapboxglRef.current = mapboxgl;
 
-      if (!map.current) {
-        map.current = L.map(container.current, {
-          zoomControl: true,
-          scrollWheelZoom: false, // Page scroll should not zoom the map.
-          attributionControl: true,
-        });
-        // `detectRetina` asks for @2x tiles on high-density screens, which is
-        // the difference between a crisp map and a blurry one on any modern
-        // laptop - and costs nothing on a display that cannot use them.
-        const chosen = BASE_LAYERS[layer];
-        base.current = L.tileLayer(chosen.url, {
-          maxZoom: chosen.maxZoom,
-          attribution: chosen.attribution,
-          detectRetina: true,
-        }).addTo(map.current);
+      // Handle multiple tokens by splitting and picking one randomly
+      const tokensStr = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_TOKENS || "";
+      const tokens = tokensStr.split(",").map(t => t.trim()).filter(Boolean);
+      mapboxgl.accessToken = tokens.length > 0 ? tokens[Math.floor(Math.random() * tokens.length)] : "";
+
+      if (!mapboxgl.accessToken) {
+        console.warn("Mapbox Token missing! Map will not load. Please add NEXT_PUBLIC_MAPBOX_TOKEN to .env.local");
       }
 
-      // Rebuild markers from scratch: the set is small, and diffing it would
-      // be more code than it saves.
+      if (!map.current) {
+        map.current = new mapboxgl.Map({
+          container: container.current,
+          style: BASE_LAYERS[layer],
+          cooperativeGestures: true, // Requires Cmd/Ctrl to zoom, fixing scroll trap!
+          attributionControl: true,
+        });
+
+        // Add controls
+        map.current.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+        map.current.addControl(new mapboxgl.ScaleControl({ maxWidth: 80, unit: "metric" }), "bottom-left");
+
+        // Fit Bounds Button Control
+        class FitBoundsControl {
+          onAdd(m: MapboxMap) {
+            this._map = m;
+            this._container = document.createElement('div');
+            this._container.className = 'mapboxgl-ctrl mapboxgl-ctrl-group';
+            const btn = document.createElement('button');
+            btn.className = 'mapboxgl-ctrl-icon';
+            btn.type = 'button';
+            btn.title = 'Fit to Route';
+            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="padding:4px;width:100%;height:100%"><path d="M4 4h16v16H4z"/><path d="M8 8l8 8M16 8l-8 8"/></svg>`;
+            btn.onclick = () => {
+              if (points.length > 0) {
+                const bounds = new mapboxgl.LngLatBounds();
+                points.forEach(p => bounds.extend([p.longitude!, p.latitude!]));
+                this._map?.fitBounds(bounds, { padding: 40, maxZoom: 15 });
+              }
+            };
+            this._container.appendChild(btn);
+            return this._container;
+          }
+          onRemove() {
+            this._container.parentNode?.removeChild(this._container);
+            this._map = undefined;
+          }
+          _map?: MapboxMap;
+          _container!: HTMLDivElement;
+        }
+        map.current.addControl(new FitBoundsControl(), "top-right");
+
+        map.current.on('load', () => {
+          if (cancelled || !map.current) return;
+          
+          // Draw animated route
+          if (points.length > 1) {
+            map.current.addSource('route', {
+              type: 'geojson',
+              data: {
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                  type: 'LineString',
+                  coordinates: points.map(p => [p.longitude!, p.latitude!])
+                }
+              }
+            });
+
+            map.current.addLayer({
+              id: 'route-line',
+              type: 'line',
+              source: 'route',
+              layout: {
+                'line-join': 'round',
+                'line-cap': 'round'
+              },
+              paint: {
+                'line-color': '#e85d2c',
+                'line-width': 3,
+                'line-dasharray': [0, 2]
+              }
+            });
+
+            // Animate dasharray
+            let step = 0;
+            const animateDash = () => {
+               if (!map.current || !map.current.getLayer('route-line')) return;
+               const dashArraySequence = [
+                 [0, 2], [0.5, 1.5], [1, 1], [1.5, 0.5], [2, 0]
+               ];
+               step = (step + 1) % dashArraySequence.length;
+               map.current.setPaintProperty('route-line', 'line-dasharray', dashArraySequence[step]);
+               setTimeout(() => requestAnimationFrame(animateDash), 100);
+            };
+            animateDash();
+          }
+          
+          setReady(true);
+        });
+      } else {
+        // Update style if layer changed
+        map.current.setStyle(BASE_LAYERS[layer]);
+      }
+
+      // Rebuild markers
       markers.current.forEach((marker) => marker.remove());
       markers.current.clear();
+      popups.current.forEach((popup) => popup.remove());
+      popups.current.clear();
 
       for (const item of points) {
-        const marker = L.marker([item.latitude!, item.longitude!], {
-          icon: L.divIcon({
-            html: markerHtml(item, false),
-            className: "",
-            iconSize: [28, 28],
-            iconAnchor: [14, 14],
-          }),
-          title: item.name,
-        }).addTo(map.current);
+        const el = document.createElement("div");
+        el.innerHTML = markerHtml(item, false);
+        el.style.cursor = "pointer";
+        
+        const popupHtml = `<strong>${escapeHtml(item.name)}</strong>` +
+          (item.district ? `<br/><small>${escapeHtml(item.district)}</small>` : "") +
+          (showPhotos ? `<div data-photo="${escapeHtml(item.name)}"></div>` : "");
 
-        // The photo is fetched only when the popup opens, not for every pin
-        // on the map: a twelve-stop plan would otherwise fire twelve image
-        // lookups the moment it rendered, for pictures nobody had asked to see.
-        marker.bindPopup(
-          `<strong>${escapeHtml(item.name)}</strong>` +
-            (item.district ? `<br/><small>${escapeHtml(item.district)}</small>` : "") +
-            (showPhotos ? `<div data-photo="${escapeHtml(item.name)}"></div>` : ""),
-          { minWidth: showPhotos ? 200 : 100 },
-        );
+        const popup = new mapboxgl.Popup({ offset: 15, closeButton: false, maxWidth: showPhotos ? "240px" : "150px" })
+          .setHTML(popupHtml);
+
+        const marker = new mapboxgl.Marker({ element: el })
+          .setLngLat([item.longitude!, item.latitude!])
+          .setPopup(popup)
+          .addTo(map.current!);
 
         if (showPhotos) {
-          marker.on("popupopen", () => {
-            const slot = document.querySelector<HTMLElement>(
-              `[data-photo="${CSS.escape(item.name)}"]`,
-            );
+          popup.on('open', () => {
+            const slot = document.querySelector<HTMLElement>(`[data-photo="${CSS.escape(item.name)}"]`);
             if (!slot || slot.dataset.loaded) return;
             slot.dataset.loaded = "1";
             void api
@@ -212,120 +243,77 @@ export function PlaceMap({
                 kind: item.kind,
               })
               .then((image) => {
-                slot.innerHTML =
-                  `<img src="${image.url}" alt="" ` +
-                  `style="margin-top:6px;width:100%;height:104px;object-fit:cover;border-radius:8px" />`;
+                slot.innerHTML = `<img src="${image.url}" alt="" style="margin-top:6px;width:100%;height:104px;object-fit:cover;border-radius:8px" />`;
               })
               .catch(() => {
                 slot.remove();
               });
           });
         }
-        marker.on("mouseover", () => handleHover(item.index));
-        marker.on("mouseout", () => handleHover(null));
-        marker.on("click", () => {
-          map.current?.flyTo([item.latitude!, item.longitude!], 16, { duration: 0.7 });
+
+        el.addEventListener("mouseenter", () => handleHover(item.index));
+        el.addEventListener("mouseleave", () => handleHover(null));
+        el.addEventListener("click", () => {
+          map.current?.flyTo({ center: [item.longitude!, item.latitude!], zoom: 16, duration: 1500 });
           onSelectItem?.(item.index);
         });
 
         markers.current.set(item.index, marker);
+        popups.current.set(item.index, popup);
       }
 
-      // A dashed line through the stops in order. Pins alone say where the
-      // places are; the line says what the day actually looks like - three
-      // stops in a row and one across town read very differently, and that is
-      // the thing worth noticing before the trip rather than during it.
-      route.current?.remove();
-      if (points.length > 1) {
-        route.current = L.polyline(
-          points.map((p) => [p.latitude!, p.longitude!] as [number, number]),
-          {
-            color: "#e85d2c",
-            weight: 2,
-            opacity: 0.55,
-            dashArray: "5 7",
-            // Under the markers: the line is context, the pins are the
-            // things being pointed at.
-            interactive: false,
-          },
-        ).addTo(map.current);
+      if (points.length > 0) {
+        const bounds = new mapboxgl.LngLatBounds();
+        points.forEach(p => bounds.extend([p.longitude!, p.latitude!]));
+        map.current.fitBounds(bounds, { padding: 40, maxZoom: 15 });
       }
 
-      const bounds = L.latLngBounds(
-        points.map((p) => [p.latitude!, p.longitude!] as [number, number]),
-      );
-      map.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
-
-      // Leaflet measures its container on creation; inside a panel that
-      // animates open, that measurement is taken mid-transition and the tiles
-      // come out misaligned until something forces a recalculation.
-      setTimeout(() => map.current?.invalidateSize(), 250);
-      setReady(true);
     }
 
     void boot();
-    return () => {
-      cancelled = true;
-    };
-  }, [signature, handleHover, points, layer, showPhotos, destination, onSelectItem]);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, layer, showPhotos, destination, onSelectItem, handleHover]);
 
-  // Fly to a stop when the list asks for it. Separate from `activeIndex`,
-  // which only highlights: hovering a row should not yank the map around,
-  // but clicking one should take you there.
+  // Handle activeIndex (hover highlights)
   useEffect(() => {
-    if (focusIndex == null || !map.current) return;
-    const target = points.find((point) => point.index === focusIndex);
-    if (!target) return;
-    map.current.flyTo([target.latitude!, target.longitude!], 15, { duration: 0.7 });
-    markers.current.get(focusIndex)?.openPopup();
-  }, [focusIndex, points]);
-
-  // Tear the map down only when the component truly unmounts.
-  useEffect(
-    () => () => {
-      map.current?.remove();
-      map.current = null;
-    },
-    [],
-  );
-
-  // Re-render markers when the highlighted item changes, and ease the map
-  // over to it so the highlight is never off-screen.
-  useEffect(() => {
-    const L = leaflet.current;
-    if (!L) return;
-
+    if (!mapboxglRef.current) return;
     markers.current.forEach((marker, index) => {
       const item = points.find((p) => p.index === index);
       if (!item) return;
-      marker.setIcon(
-        L.divIcon({
-          html: markerHtml(item, index === activeIndex),
-          className: "",
-          iconSize: [28, 28],
-          iconAnchor: [14, 14],
-        }),
-      );
+      const el = marker.getElement();
+      el.innerHTML = markerHtml(item, index === activeIndex);
     });
 
     if (activeIndex != null) {
       const item = points.find((p) => p.index === activeIndex);
       if (item && map.current) {
-        map.current.panTo([item.latitude!, item.longitude!], {
-          animate: true,
-          duration: 0.5,
-        });
+        map.current.panTo([item.longitude!, item.latitude!], { duration: 500 });
       }
     }
   }, [activeIndex, points]);
 
+  // Handle focusIndex (click in list)
+  useEffect(() => {
+    if (focusIndex == null || !map.current) return;
+    const target = points.find((point) => point.index === focusIndex);
+    if (!target) return;
+    map.current.flyTo({ center: [target.longitude!, target.latitude!], zoom: 15, duration: 1500 });
+    const popup = popups.current.get(focusIndex);
+    const marker = markers.current.get(focusIndex);
+    if (popup && marker) marker.togglePopup();
+  }, [focusIndex, points]);
+
+  // Teardown
+  useEffect(() => () => {
+    map.current?.remove();
+    map.current = null;
+  }, []);
+
   if (points.length === 0) {
     return (
-      <div
-        className={`grid place-items-center rounded-2xl border border-dashed border-[var(--color-line-strong)] p-6 text-center text-xs text-[var(--color-ink-soft)] ${className}`}
-      >
-        No mapped coordinates for this plan yet — ask for specific places and
-        they&apos;ll appear here.
+      <div className={`grid place-items-center rounded-2xl border border-dashed border-[var(--color-line-strong)] p-6 text-center text-xs text-[var(--color-ink-soft)] ${className}`}>
+        No mapped coordinates for this plan yet — ask for specific places and they&apos;ll appear here.
       </div>
     );
   }

@@ -277,7 +277,10 @@ function WeatherPanel({
               <p className="text-[9px] uppercase tracking-wide text-[var(--color-ink-faint)]">
                 {new Date(day.date).toLocaleDateString(undefined, { weekday: "short" })}
               </p>
-              <p className="mt-0.5 font-display text-sm font-semibold">
+              <p className="text-[10px] font-medium text-[var(--color-brand-strong)]">
+                {new Date(day.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </p>
+              <p className="mt-1 font-display text-sm font-semibold">
                 {day.temp_max_c != null ? `${Math.round(day.temp_max_c)}°` : "—"}
               </p>
               <p className="text-[9px] text-[var(--color-ink-faint)]">
