@@ -192,6 +192,15 @@ body {
 .leaflet-container {
   font: inherit;
   background: var(--color-surface-2);
+  /* Leaflet stacks its own panes from 400 and its controls at 1000, on the
+     assumption it owns the page. It does not: a map sitting in the trip panel
+     was painting its tiles and zoom buttons straight through a full-screen
+     dialog, so opening the big map showed a ghost of the small one floating
+     over the stop list. Giving the container a stacking context of its own
+     traps all of that inside it, and dialogs then only need to out-rank the
+     container rather than Leaflet's internals. */
+  isolation: isolate;
+  z-index: 0;
 }
 
 .leaflet-control-zoom a {

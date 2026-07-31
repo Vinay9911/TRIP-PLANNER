@@ -372,6 +372,14 @@ _TOOLS_FOR_STEP_KIND: dict[str, tuple[str, ...]] = {
         "find_places",
         "search_web",
         "recall_user_preferences",
+        # Weather belongs here as well as in logistics, and leaving it out was
+        # a real fault rather than a tidy separation. "What will the weather be
+        # in Delhi on 8 August?" is planned as research, and without the
+        # forecast tool the only thing left in the box that could answer it was
+        # `search_web` - so the agent read a temperature off a blog instead of
+        # measuring it, produced no structured forecast, and the weather panel
+        # stayed empty while the reply confidently quoted 35°C.
+        "get_weather_forecast",
     ),
     "logistics": (
         "search_flights",

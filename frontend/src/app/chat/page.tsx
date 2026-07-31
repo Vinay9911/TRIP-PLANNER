@@ -465,7 +465,13 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
           only the things that change what the *next* message does. On mobile
           the drawer stands in for the panel, so it stays. */}
       <div className="sticky bottom-0 space-y-2 bg-gradient-to-t from-[var(--color-paper)] via-[var(--color-paper)] to-transparent pb-4 pt-3">
-        <TripPanelDrawer trip={trip} facts={facts} pins={pins} busy={busy} />
+        <TripPanelDrawer
+          trip={trip}
+          facts={facts}
+          pins={pins}
+          busy={busy}
+          onAsk={(message) => void send(message)}
+        />
 
         <div className="flex flex-wrap items-center gap-1.5">
           <IncludeControl focus={focus} onToggle={toggleService} />
@@ -519,7 +525,13 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
           header; the panel scrolls internally when it outgrows the viewport. */}
       <aside className="hidden lg:block">
         <div className="sticky top-4 max-h-[calc(100dvh-2rem)] overflow-y-auto py-6 pr-1">
-          <TripPanel trip={trip} facts={facts} pins={pins} busy={busy} />
+          <TripPanel
+            trip={trip}
+            facts={facts}
+            pins={pins}
+            busy={busy}
+            onAsk={(message) => void send(message)}
+          />
         </div>
       </aside>
     </div>

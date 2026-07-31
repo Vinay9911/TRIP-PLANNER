@@ -35,7 +35,12 @@ import {
   IconUsers,
   IconWallet,
 } from "@/components/icons";
-import { PlaceMap, dayColor, type MappedItem } from "@/components/PlaceMap";
+import {
+  PlaceMap,
+  dayColor,
+  type BaseLayerName,
+  type MappedItem,
+} from "@/components/PlaceMap";
 import { PlacePhoto } from "@/components/PlacePhoto";
 import type { ChatResponse, TripFact, TripState } from "@/lib/api";
 
@@ -56,6 +61,9 @@ function Panel({
   hint,
   fact,
   action,
+  ask,
+  askLabel = "Ask now",
+  onAsk,
   children,
 }: {
   title: string;
@@ -64,6 +72,12 @@ function Panel({
   hint: string;
   fact?: TripFact;
   action?: React.ReactNode;
+  /** The message the button sends. Omitted when there is nothing sensible
+   *  to ask yet - offering "find me a hotel" before a destination is known
+   *  just produces a clarifying question. */
+  ask?: string;
+  askLabel?: string;
+  onAsk?: (message: string) => void;
   children?: React.ReactNode;
 }) {
   return (
@@ -77,10 +91,26 @@ function Panel({
 
       <div className="px-3 pb-3">
         {state === "empty" && (
-          <p className="flex items-start gap-1.5 rounded-xl bg-[var(--color-surface-2)] px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-ink-faint)]">
-            <IconInfo size="0.9em" className="mt-0.5 shrink-0" />
-            {hint}
-          </p>
+          <div className="rounded-xl bg-[var(--color-surface-2)] px-3 py-2.5">
+            <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-[var(--color-ink-faint)]">
+              <IconInfo size="0.9em" className="mt-0.5 shrink-0" />
+              {hint}
+            </p>
+            {/* The button sends the same sentence the traveller would have
+                typed, rather than calling a tool directly. Everything then
+                flows through the one path that keeps the conversation, the
+                memory and the trace consistent - and the transcript still
+                reads as something a person said. */}
+            {onAsk && ask && (
+              <button
+                type="button"
+                onClick={() => onAsk(ask)}
+                className="mt-2 inline-flex min-h-8 items-center gap-1 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-2.5 text-[11px] font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
+              >
+                {askLabel}
+              </button>
+            )}
+          </div>
         )}
         {state === "loading" && <div className="skeleton h-20 w-full rounded-xl" />}
         {state === "ready" && children}
@@ -184,7 +214,17 @@ function IconCompassLite() {
   return <IconPin size="1em" />;
 }
 
-function WeatherPanel({ fact, busy }: { fact?: TripFact; busy: boolean }) {
+function WeatherPanel({
+  fact,
+  busy,
+  trip,
+  onAsk,
+}: {
+  fact?: TripFact;
+  busy: boolean;
+  trip: TripState;
+  onAsk?: (message: string) => void;
+}) {
   const data = fact?.data as
     | {
         location?: string;
@@ -208,8 +248,24 @@ function WeatherPanel({ fact, busy }: { fact?: TripFact; busy: boolean }) {
       title="Weather"
       icon={<IconSun size="1em" />}
       state={state}
-      hint="Ask what the weather will be like and the forecast lands here."
+      hint={
+        trip.destination
+          ? "The forecast lands here once it has been looked up."
+          : "Name a destination and its forecast lands here."
+      }
       fact={fact}
+      onAsk={onAsk}
+      askLabel="Check the weather"
+      // Only offered once there is somewhere to check. Without a date the
+      // question includes that gap deliberately, so the agent asks for the
+      // dates rather than silently assuming some.
+      ask={
+        trip.destination
+          ? trip.start_date || trip.travel_window
+            ? `What's the weather like in ${trip.destination} for those dates?`
+            : `What's the weather like in ${trip.destination}?`
+          : undefined
+      }
     >
       {days.length > 0 ? (
         <div className="grid grid-cols-4 gap-1.5">
@@ -258,10 +314,12 @@ function StaysPanel({
   fact,
   busy,
   destination,
+  onAsk,
 }: {
   fact?: TripFact;
   busy: boolean;
   destination: string;
+  onAsk?: (message: string) => void;
 }) {
   const data = fact?.data as
     | {
@@ -284,8 +342,15 @@ function StaysPanel({
       title="Places to stay"
       icon={<IconBed size="1em" />}
       state={state}
-      hint="Ask where to stay and the options appear here, with photos."
+      hint={
+        destination
+          ? "Places to stay appear here, with photographs."
+          : "Name a destination and places to stay appear here."
+      }
       fact={fact}
+      onAsk={onAsk}
+      askLabel="Find places to stay"
+      ask={destination ? `Where should I stay in ${destination}?` : undefined}
     >
       {stays.length > 0 ? (
         <ul className="space-y-1.5">
@@ -324,7 +389,17 @@ function StaysPanel({
   );
 }
 
-function FlightsPanel({ fact, busy }: { fact?: TripFact; busy: boolean }) {
+function FlightsPanel({
+  fact,
+  busy,
+  trip,
+  onAsk,
+}: {
+  fact?: TripFact;
+  busy: boolean;
+  trip: TripState;
+  onAsk?: (message: string) => void;
+}) {
   const data = fact?.data as
     | {
         route?: { from?: string; to?: string };
@@ -346,8 +421,21 @@ function FlightsPanel({ fact, busy }: { fact?: TripFact; busy: boolean }) {
       title="Flights"
       icon={<IconPlane size="1em" />}
       state={state}
-      hint="Tell me where you're flying from and options appear here."
+      hint={
+        trip.origin
+          ? "Flight options appear here."
+          : "Say where you're flying from and options appear here."
+      }
       fact={fact}
+      onAsk={onAsk}
+      askLabel="Look up flights"
+      ask={
+        trip.destination
+          ? trip.origin
+            ? `Find flights from ${trip.origin} to ${trip.destination}.`
+            : `Find me flights to ${trip.destination}.`
+          : undefined
+      }
     >
       {offers.length > 0 ? (
         <ul className="space-y-1">
@@ -377,7 +465,15 @@ function FlightsPanel({ fact, busy }: { fact?: TripFact; busy: boolean }) {
   );
 }
 
-function MapPanel({ pins, busy }: { pins: MappedItem[]; busy: boolean }) {
+function MapPanel({
+  pins,
+  busy,
+  destination,
+}: {
+  pins: MappedItem[];
+  busy: boolean;
+  destination: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [active, setActive] = useState<number | null>(null);
   const state: PanelState = pins.length > 0 ? "ready" : busy ? "loading" : "empty";
@@ -414,7 +510,9 @@ function MapPanel({ pins, busy }: { pins: MappedItem[]; busy: boolean }) {
         </p>
       </Panel>
 
-      {expanded && <ExpandedMap pins={pins} onClose={() => setExpanded(false)} />}
+      {expanded && (
+        <ExpandedMap pins={pins} destination={destination} onClose={() => setExpanded(false)} />
+      )}
     </>
   );
 }
@@ -426,8 +524,18 @@ function MapPanel({ pins, busy }: { pins: MappedItem[]; busy: boolean }) {
  * a route. Rather than making the panel taller and pushing the rest of the
  * trip off screen, the detail lives behind one control.
  */
-function ExpandedMap({ pins, onClose }: { pins: MappedItem[]; onClose: () => void }) {
+function ExpandedMap({
+  pins,
+  destination,
+  onClose,
+}: {
+  pins: MappedItem[];
+  destination: string;
+  onClose: () => void;
+}) {
   const [active, setActive] = useState<number | null>(null);
+  const [focus, setFocus] = useState<number | null>(null);
+  const [layer, setLayer] = useState<BaseLayerName>("Map");
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -449,10 +557,33 @@ function ExpandedMap({ pins, onClose }: { pins: MappedItem[]; onClose: () => voi
       aria-label="Trip map"
       className="fade-in fixed inset-0 z-50 flex flex-col bg-[var(--color-paper)] p-3 sm:p-5"
     >
-      <header className="flex items-center gap-3 pb-3">
-        <h2 className="flex-1 font-display text-base font-semibold">
-          {pins.length} stops
-        </h2>
+      <header className="flex flex-wrap items-center gap-2 pb-3">
+        <h2 className="flex-1 font-display text-base font-semibold">{pins.length} stops</h2>
+
+        {/* Satellite is the one people want for a holiday: a street map says
+            where the fort is, imagery says what it looks like. Both keyless. */}
+        <div
+          role="group"
+          aria-label="Map style"
+          className="flex rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] p-0.5"
+        >
+          {(["Map", "Satellite", "Terrain"] as BaseLayerName[]).map((name) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => setLayer(name)}
+              aria-pressed={layer === name}
+              className={`rounded-full px-3 py-1 text-[11px] font-medium transition-colors duration-200 ${
+                layer === name
+                  ? "bg-[var(--color-brand)] text-white"
+                  : "text-[var(--color-ink-soft)] hover:text-[var(--color-brand-strong)]"
+              }`}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+
         <button
           type="button"
           onClick={onClose}
@@ -466,12 +597,18 @@ function ExpandedMap({ pins, onClose }: { pins: MappedItem[]; onClose: () => voi
         <PlaceMap
           items={pins}
           activeIndex={active}
+          focusIndex={focus}
           onHoverItem={setActive}
+          onSelectItem={setFocus}
+          layer={layer}
+          destination={destination}
+          showPhotos
           className="h-full min-h-[18rem] rounded-2xl"
         />
 
-        {/* Hovering a row lifts its pin. The list is the reason to expand at
-            all: on a small panel there is nowhere to put the stop names. */}
+        {/* Hover highlights the pin, click flies to it and opens its photo.
+            Two behaviours rather than one, because hovering a list should not
+            yank the map around while the eye is still scanning. */}
         <ol className="hidden min-h-0 overflow-y-auto rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] p-2 lg:block">
           {pins.map((pin) => (
             <li key={pin.index}>
@@ -479,8 +616,9 @@ function ExpandedMap({ pins, onClose }: { pins: MappedItem[]; onClose: () => voi
                 type="button"
                 onMouseEnter={() => setActive(pin.index)}
                 onMouseLeave={() => setActive(null)}
+                onClick={() => setFocus(pin.index)}
                 className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left transition-colors duration-150 ${
-                  active === pin.index
+                  active === pin.index || focus === pin.index
                     ? "bg-[var(--color-brand-soft)]"
                     : "hover:bg-[var(--color-surface-2)]"
                 }`}
@@ -491,9 +629,7 @@ function ExpandedMap({ pins, onClose }: { pins: MappedItem[]; onClose: () => voi
                 >
                   {pin.index}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-[11px] font-medium">
-                  {pin.name}
-                </span>
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{pin.name}</span>
               </button>
             </li>
           ))}
@@ -518,21 +654,24 @@ export function TripPanel({
   facts,
   pins,
   busy,
+  onAsk,
 }: {
   trip: TripState;
   facts: { weather?: TripFact; stays?: TripFact; flights?: TripFact };
   pins: MappedItem[];
   busy: boolean;
+  /** Sends a message as if the traveller had typed it. */
+  onAsk?: (message: string) => void;
 }) {
   const destination = (trip.destination as string) ?? "";
 
   return (
     <div className="space-y-2.5">
       <TripSummary trip={trip} />
-      <MapPanel pins={pins} busy={busy} />
-      <WeatherPanel fact={facts.weather} busy={busy} />
-      <StaysPanel fact={facts.stays} busy={busy} destination={destination} />
-      <FlightsPanel fact={facts.flights} busy={busy} />
+      <MapPanel pins={pins} busy={busy} destination={destination} />
+      <WeatherPanel fact={facts.weather} busy={busy} trip={trip} onAsk={onAsk} />
+      <StaysPanel fact={facts.stays} busy={busy} destination={destination} onAsk={onAsk} />
+      <FlightsPanel fact={facts.flights} busy={busy} trip={trip} onAsk={onAsk} />
     </div>
   );
 }

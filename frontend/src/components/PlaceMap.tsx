@@ -26,7 +26,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type * as LeafletNamespace from "leaflet";
 
-import type { ItineraryItem } from "@/lib/api";
+import { api, type ItineraryItem } from "@/lib/api";
 
 export interface MappedItem extends ItineraryItem {
   /** 1-based position across the whole trip, shown inside the marker. */
@@ -64,16 +64,57 @@ function markerHtml(item: MappedItem, active: boolean): string {
     ">${item.index}</span>`;
 }
 
+/**
+ * Base layers, all keyless.
+ *
+ * Satellite is the one people actually want for a holiday - a street map
+ * tells you where the fort is, imagery tells you what it looks like from
+ * above - and Esri serves it without a key or an account. Terrain earns its
+ * place for anywhere mountainous, where "two hours away" and "two hours away
+ * over a pass" are the same distance on a flat map.
+ */
+const BASE_LAYERS = {
+  Map: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}{r}.png",
+    attribution: "© OpenStreetMap contributors",
+    maxZoom: 19,
+  },
+  Satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Imagery © Esri, Maxar, Earthstar Geographics",
+    maxZoom: 19,
+  },
+  Terrain: {
+    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    attribution: "© OpenStreetMap contributors, SRTM · © OpenTopoMap",
+    maxZoom: 17,
+  },
+} as const;
+
+export type BaseLayerName = keyof typeof BASE_LAYERS;
+
 export function PlaceMap({
   items,
   activeIndex = null,
+  focusIndex = null,
   onHoverItem,
+  onSelectItem,
+  layer = "Map",
+  destination = "",
+  showPhotos = false,
   className = "",
 }: {
   items: MappedItem[];
   /** Highlighted item, driven by hovering a day card. */
   activeIndex?: number | null;
+  /** Fly to this stop when it changes. Set by clicking a row in the list. */
+  focusIndex?: number | null;
   onHoverItem?: (index: number | null) => void;
+  onSelectItem?: (index: number) => void;
+  layer?: BaseLayerName;
+  destination?: string;
+  /** Put a photograph in the popup. Only worth the request on the big map. */
+  showPhotos?: boolean;
   className?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
@@ -82,6 +123,7 @@ export function PlaceMap({
   const map = useRef<LeafletNamespace.Map | null>(null);
   const markers = useRef<Map<number, LeafletNamespace.Marker>>(new Map());
   const route = useRef<LeafletNamespace.Polyline | null>(null);
+  const base = useRef<LeafletNamespace.TileLayer | null>(null);
   const leaflet = useRef<typeof LeafletNamespace | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -117,9 +159,14 @@ export function PlaceMap({
           scrollWheelZoom: false, // Page scroll should not zoom the map.
           attributionControl: true,
         });
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          maxZoom: 19,
-          attribution: "© OpenStreetMap contributors",
+        // `detectRetina` asks for @2x tiles on high-density screens, which is
+        // the difference between a crisp map and a blurry one on any modern
+        // laptop - and costs nothing on a display that cannot use them.
+        const chosen = BASE_LAYERS[layer];
+        base.current = L.tileLayer(chosen.url, {
+          maxZoom: chosen.maxZoom,
+          attribution: chosen.attribution,
+          detectRetina: true,
         }).addTo(map.current);
       }
 
@@ -139,14 +186,46 @@ export function PlaceMap({
           title: item.name,
         }).addTo(map.current);
 
+        // The photo is fetched only when the popup opens, not for every pin
+        // on the map: a twelve-stop plan would otherwise fire twelve image
+        // lookups the moment it rendered, for pictures nobody had asked to see.
         marker.bindPopup(
           `<strong>${escapeHtml(item.name)}</strong>` +
-            (item.district ? `<br/><small>${escapeHtml(item.district)}</small>` : ""),
+            (item.district ? `<br/><small>${escapeHtml(item.district)}</small>` : "") +
+            (showPhotos ? `<div data-photo="${escapeHtml(item.name)}"></div>` : ""),
+          { minWidth: showPhotos ? 200 : 100 },
         );
+
+        if (showPhotos) {
+          marker.on("popupopen", () => {
+            const slot = document.querySelector<HTMLElement>(
+              `[data-photo="${CSS.escape(item.name)}"]`,
+            );
+            if (!slot || slot.dataset.loaded) return;
+            slot.dataset.loaded = "1";
+            void api
+              .placeImage({
+                name: item.name,
+                destination,
+                latitude: item.latitude,
+                longitude: item.longitude,
+                kind: item.kind,
+              })
+              .then((image) => {
+                slot.innerHTML =
+                  `<img src="${image.url}" alt="" ` +
+                  `style="margin-top:6px;width:100%;height:104px;object-fit:cover;border-radius:8px" />`;
+              })
+              .catch(() => {
+                slot.remove();
+              });
+          });
+        }
         marker.on("mouseover", () => handleHover(item.index));
         marker.on("mouseout", () => handleHover(null));
         marker.on("click", () => {
-          map.current?.flyTo([item.latitude!, item.longitude!], 16, { duration: 0.6 });
+          map.current?.flyTo([item.latitude!, item.longitude!], 16, { duration: 0.7 });
+          onSelectItem?.(item.index);
         });
 
         markers.current.set(item.index, marker);
@@ -188,7 +267,18 @@ export function PlaceMap({
     return () => {
       cancelled = true;
     };
-  }, [signature, handleHover, points]);
+  }, [signature, handleHover, points, layer, showPhotos, destination, onSelectItem]);
+
+  // Fly to a stop when the list asks for it. Separate from `activeIndex`,
+  // which only highlights: hovering a row should not yank the map around,
+  // but clicking one should take you there.
+  useEffect(() => {
+    if (focusIndex == null || !map.current) return;
+    const target = points.find((point) => point.index === focusIndex);
+    if (!target) return;
+    map.current.flyTo([target.latitude!, target.longitude!], 15, { duration: 0.7 });
+    markers.current.get(focusIndex)?.openPopup();
+  }, [focusIndex, points]);
 
   // Tear the map down only when the component truly unmounts.
   useEffect(
