@@ -20,9 +20,10 @@ rejected option is named and the reason given.
 8. [Data model and isolation](#8-data-model-and-isolation)
 9. [Multilingual support](#9-multilingual-support)
 10. [Failure handling](#10-failure-handling)
-11. [Deployment](#11-deployment)
-12. [Decision log](#12-decision-log)
-13. [What I would do next](#13-what-i-would-do-next)
+11. [Latency, quota and what the traveller sees](#11-latency-quota-and-what-the-traveller-sees)
+12. [Deployment](#12-deployment)
+13. [Decision log](#13-decision-log)
+14. [What I would do next](#14-what-i-would-do-next)
 
 ---
 
@@ -742,7 +743,121 @@ successful turn into an error to record it would be absurd.
 
 ---
 
-## 11. Deployment
+## 11. Latency, quota and what the traveller sees
+
+### 11.1 The agent was never slow; it was silent
+
+Measured against the live API from a laptop in India:
+
+| | |
+|---|---|
+| One Groq call, `llama-3.1-8b-instant` | 935 ms |
+| One Groq call, `llama-3.3-70b-versatile` | 1,145 ms |
+| Supabase round trip (ap-southeast-1) | 116 ms |
+| Wikivoyage / Open-Meteo call | ~1,000 ms |
+
+Nothing there is slow. But a full plan issues roughly fifty model calls and
+fifty tool calls, sequentially, and until recently displayed **nothing at all**
+until the last of them returned. A 370-second run showed a spinner for six
+minutes.
+
+That is a presentation failure, not a performance one, and it has a worse
+second-order effect: people assume the app has crashed and reload, which
+discards the work in flight and starts the cost again.
+
+`POST /api/v1/chat/stream` narrates the run over server-sent events — node
+transitions from LangGraph's own `astream`, and each tool call as it
+completes. The final event carries the identical body the plain endpoint
+returns, so a client needs no second request.
+
+Three properties of `services/progress.py` are deliberate:
+
+- **Emitting is free when nobody listens.** The plain endpoint opens no
+  channel, and `emit` becomes a no-op. Otherwise every non-streaming request
+  would pay for a feature it does not use.
+- **A full queue drops rather than blocks.** A status line is worth strictly
+  less than the work it describes; a stalled reader must never stall the agent.
+- **It is context-local.** Two concurrent travellers cannot see each other's
+  progress — the same reason the token meter and the tool recorder are.
+
+### 11.2 What actually costs the time
+
+One measured 370-second run, from the trace tables:
+
+| Cause | Cost |
+|---|---|
+| One runaway step: 43 `search_accommodation` calls, most of them duplicates | **194 s** |
+| Four steps failing on exhausted quota, then retrying | — |
+| 11 RAG hops at ~10 s each | ~114 s |
+
+The runaway is fixed (§4.5). The remaining structural cost is that plan steps
+run **strictly sequentially** — `executor_node` handles one step per graph
+invocation and the graph loops. Research steps are independent of one another
+and could fan out; that is the largest remaining win and is listed in §14.
+
+### 11.3 Local models are a quota fix, not a speed fix
+
+Groq's free tier caps **tokens per day per model**, which is the one failure a
+second API key cannot solve. `LLM_PROVIDER=auto` therefore falls back to a
+model served by Ollama once every key is spent, rather than failing the turn.
+
+The absence of an API key is what selects the local provider, rather than a
+separate flag — there is no credential to pool or rotate, so "no key" is the
+honest signal and there is no second thing to keep in sync.
+
+Model selection was measured on the development machine (RTX 3050, 4 GB):
+
+| Model | Tool calls | Throughput | Verdict |
+|---|---|---|---|
+| `llama3.2:3b` | correct | 47.8 tok/s | fits in VRAM — chosen for all three roles |
+| `llama3.1:8b` | correct | 7.5 tok/s | spills to CPU |
+| `qwen3:4b` | **none emitted** | 21.2 tok/s | cannot drive the executor |
+
+Two honest limits. It is *slower* than Groq, so it solves running out rather
+than waiting. And it cannot be deployed on a free tier — Ollama plus a model
+needs gigabytes and Render's free instance has 512 MB — so this is a
+development-machine capability, and deployments stay on Groq.
+
+Every reply reports which providers served it, and the composer shows which is
+active. That transparency is half the point: a local reply is genuinely
+slower, and without saying so the interface simply looks broken.
+
+### 11.4 A wrong pin is worse than no pin
+
+Photographs and map pins were originally attached only to a completed
+itinerary — the rarest thing this agent produces, since most conversations are
+advisory turns that never reach a full plan. Both features existed and were
+almost never seen. Advisory turns now geocode the options they offer.
+
+Doing so exposed how confidently geocoders answer when they should not, in
+three distinct ways, all found against the live APIs:
+
+1. **Relevance ranking.** `count=1` for "Bali" returns a village in West
+   Bengal ahead of the Indonesian island. Fixed by requesting ten candidates
+   and taking the most populous.
+2. **The qualifier is a hint, not a constraint.** "Jaigarh Fort, Jaipur"
+   resolved to Maharashtra, 1,100 km away. Fixed with a proximity bias plus a
+   distance ceiling (`MAX_PIN_DISTANCE_KM`, 300 km).
+3. **The fallback match — the dangerous one.** Asked for "Catskill Mountains,
+   New York", Geoapify cannot find the Catskills, so it matches the part it
+   recognises and returns *Manhattan*, with `match_type=match_by_city_or_disrict`
+   and confidence 0.25. **A distance check cannot catch this**, because the
+   wrong answer is by construction zero kilometres from the point being
+   searched. Only reading what the geocoder says it matched catches it.
+
+A fourth, related: "most populous wins" cannot break a tie when nothing
+reports a population. Open-Meteo answers "Kerala" with a Finnish village,
+because the Indian state is not a settlement in its index. The centre is what
+every landmark is then measured against, so that single lookup was not
+misplacing one pin — it was rejecting all four correct ones as 7,000 km
+outliers. `geocode_centre` asks a geocoder that has states in it and requires
+the result to be a place of the right *kind*.
+
+The consistent trade: fewer pins on regional destinations, and no wrong ones.
+
+---
+
+## 12. Deployment
 
 ```mermaid
 graph LR
@@ -770,13 +885,13 @@ than to produce a better itinerary with a longer plan.
 
 ---
 
-## 12. Decision log
+## 13. Decision log
 
 | # | Decision | Rejected | Reason |
 |---|---|---|---|
 | 1 | Hand-built `StateGraph` | `create_agent` alone | It is ReAct; it does not plan |
 | 2 | `create_agent` inside the executor | Hand-rolled dispatch | The inner loop is solved; reimplementing buys nothing |
-| 3 | Three Groq model tiers | One model | ~1,000 req/day; one turn costs 6–12 |
+| 3 | Three Groq model tiers | One model | The cap is 100k **tokens**/day *per model*; tiering spreads it |
 | 4 | Gemini embeddings, 768d | Local `sentence-transformers` | torch will not fit in 512 MB; also multilingual |
 | 5 | Supabase pgvector | Pinecone, Chroma, FAISS | Admin joins, DB-enforced isolation, one backup story |
 | 6 | Wikivoyage corpus | Wikipedia dump | Districts are addressable → real multi-hop |
@@ -789,10 +904,14 @@ than to produce a better itinerary with a longer plan.
 | 13 | RLS via `set local role` | Trust application filters | The database refuses; code merely promises |
 | 14 | Local JWKS verification | Call the auth server | No per-request round trip; survives auth outages |
 | 15 | Background memory extraction | Inline | Costs ~2 s; benefit lands next session |
+| 16 | Server-sent events for progress | WebSockets | One-way and short-lived; survives buffering proxies; no connection state on a host that sleeps |
+| 17 | Ollama fallback on daily exhaustion | Failing the turn | A spent daily budget is the one failure a second key cannot fix |
+| 18 | An absent API key selects the local provider | A separate flag | Nothing to pool or rotate; one signal instead of two to keep in sync |
+| 19 | Reading the geocoder's `match_type` | Distance check alone | The city-fallback match sits 0 km from the search point and no distance test can see it |
 
 ---
 
-## 13. What I would do next
+## 14. What I would do next
 
 Honest about what is thin, in priority order.
 
@@ -800,14 +919,18 @@ Honest about what is thin, in priority order.
    constraint adherence, grounding and tool appropriateness. Today's evidence
    is unit tests plus manual inspection; that does not catch a regression in
    *answer quality*.
-2. **Streaming responses.** A full turn takes 10–20 s and currently arrives at
-   once. Token streaming would transform the perceived latency, and LangGraph
-   supports it natively.
-3. **Semantic caching.** Two users asking about Kyoto with similar preferences
+2. **Parallel step execution.** The largest remaining latency win, and the
+   only structural one left. `executor_node` runs one step per graph
+   invocation, so a five-step plan is five sequential round trips even though
+   researching attractions, checking weather and finding stays depend on
+   nothing but the plan. `PlanStep.depends_on_previous` already exists and is
+   unused; LangGraph fans out natively.
+3. **Token streaming.** Progress is streamed (§11.1), but the answer itself
+   still arrives whole. Streaming the composition would make the last few
+   seconds feel instant.
+4. **Semantic caching.** Two users asking about Kyoto with similar preferences
    repeat most of the work. Caching on an embedding of (destination +
    constraints) would cut both latency and quota use.
-4. **Parallel step execution.** `PlanStep.depends_on_previous` already exists
-   but is unused — independent steps could run concurrently.
 5. **Stronger grounding.** The current check is a heuristic that logs rather
    than blocks. A proper claim-level verifier gating the response would be
    better, at the cost of another model call.

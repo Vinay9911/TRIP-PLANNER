@@ -27,13 +27,15 @@ first three beats polish elsewhere.
 |---|---|---|
 | LangGraph `StateGraph`, hand-built | LangChain 1.x removed the prebuilt Plan-and-Execute agent the brief names | `create_agent` alone — it is a ReAct loop, it does not plan |
 | `create_agent` **inside** the executor node | The inner tool-calling loop is a solved problem; reimplementing it buys nothing | Hand-rolled tool dispatch |
-| Groq, three model tiers | ~1,000 requests/day free; one turn costs 6–12 calls | One model for everything |
+| Groq, three model tiers | The cap is 100k **tokens**/day *per model*; tiering spreads one turn's 6–12 calls across three buckets | One model for everything |
 | Gemini `gemini-embedding-001` @ 768d | Groq has no embeddings; local torch will not fit in 512 MB | `sentence-transformers` |
 | Supabase Postgres + pgvector | One DB for auth, chats, memories, traces; RLS enforces isolation | Pinecone/Chroma — splits users from memories, breaks the admin joins |
 | Wikivoyage as RAG corpus | Districts are addressable subpages → real multi-hop | Wikipedia dump — no district structure, too large for 500 MB |
 | Open-Meteo | No key, no card | OpenWeatherMap One Call — requires a card |
 | Geoapify | Documented free tier; `conditions` filters vegetarian/wheelchair/dogs | OpenTripMap — could not confirm signup is still open |
 | Mock flight provider | **Amadeus Self-Service was decommissioned 2026-07-17** | Duffel sandbox — real API, fictional airline data |
+| Ollama `llama3.2:3b` as local fallback | A spent *daily* budget is the one failure a second key cannot fix | `llama3.1:8b` (6x slower, spills 4 GB VRAM), `qwen3:4b` (emits no tool calls at all) |
+| SSE for progress | One-way, short-lived, survives buffering proxies, no state on a host that sleeps | WebSockets |
 
 Versions verified at build time: LangChain 1.3.14, LangGraph 1.2.10,
 FastAPI 0.140, Python 3.13 local / 3.12 in Docker.
@@ -50,6 +52,10 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m pytest tests/ -q
 ./.venv/Scripts/python.exe -m ruff check app tests --fix
 ./.venv/Scripts/python.exe -m ruff format app tests
 ./.venv/Scripts/python.exe run.py    # → localhost:8000/docs  (NOT bare uvicorn on Windows)
+
+# Local models (optional). LLM_PROVIDER=auto falls back to these when the
+# daily Groq budget is spent; =local stays off the cloud entirely.
+ollama pull llama3.2:3b
 ```
 
 Tests need no network, no database and no API keys. Keep it that way — a
@@ -60,7 +66,8 @@ suite that needs credentials is a suite that stops being run.
 ```
 backend/app/
   core/       config, logging, errors, security   (imports nothing from app)
-  services/   llm, embeddings, http               (one module per external system)
+  services/   llm, embeddings, http, geocoding, images, progress
+                                                   (one module per external system)
   db/         session (RLS scoping), repositories (ALL SQL lives here)
   providers/  flights                             (swappable implementations)
   tools/      8 tools + registry                  (the model's action surface)
@@ -170,6 +177,40 @@ imports `agent/`. A tool that knows about the planner cannot be tested alone.
   `lon,lat`, the reverse of everywhere else in this codebase and silent when
   swapped; and no centre must mean no filtering, because an empty map is a
   worse outcome than an optimistic one.
+- **`recursion_limit` does not limit tool calls.** It counts LangGraph
+  super-steps, and every tool call in one assistant message shares a
+  super-step - so a model calling tools in parallel can make any number of
+  them within the limit. Observed: 43 `search_accommodation` calls in a single
+  step, 194s against a 90s timeout, 156,870 tokens for one reply. The cap is
+  enforced in `_budgeted_tools` instead, which also memoises identical calls -
+  worth more than the cap, since most of the 43 were the same query repeated.
+  Related: the step timeout was being applied *per attempt*, so every key
+  rotation restarted the clock; the deadline is now computed once per step.
+- **A geocoder's `match_type` is the only thing that catches its worst
+  answer.** Asked for "Catskill Mountains, New York", Geoapify cannot find the
+  Catskills, matches the part it recognises, and returns Manhattan with
+  `match_by_city_or_disrict` and confidence 0.25. `MAX_PIN_DISTANCE_KM` cannot
+  see this - the wrong answer is *zero km* from the point being searched. The
+  proximity bias added for the Jaigarh Fort bug made it worse, not better.
+  Reject `_QUALIFIER_ONLY_MATCHES` and anything under `MIN_MATCH_CONFIDENCE`.
+- **`geocode_place` must not be used for a map centre.** Open-Meteo indexes
+  populated places, so the Indian state of Kerala is either absent or carries
+  no population - and "most populous wins" cannot break a tie when every
+  candidate reports nothing. It answers "Kerala" with **Kerälä, Finland**. The
+  centre is what every landmark is then measured against, so that one lookup
+  did not misplace a pin, it rejected all four correct ones as 7,000 km
+  outliers. Use `geocode_centre` (Geoapify, filtered to `_CENTRE_RESULT_TYPES`).
+- **`needs_clarification` must not outrank the slot ledger.** The model set it
+  after "trip to usa" and asked "Which city or country did you have in mind?" -
+  a question already answered in the first sentence. The prompt forbids this
+  and the model did it anyway, which is the argument for gear selection being
+  code. `decide_mode` now clarifies only when there is genuinely no
+  destination; the one truly blocked case (flights with no origin) is checked
+  against the ledger.
+- **Progress must be free when nobody is listening.** `services/progress.py`
+  is a no-op with no channel open, and drops on a full queue rather than
+  blocking. The plain `/chat` endpoint opens no channel, so every emit on that
+  path has to cost nothing, and a stalled reader must never stall the agent.
 - **Cast arguments to Postgres functions explicitly** (`%s::uuid`, `%s::int`,
   `%s::real`). psycopg infers `smallint` from a small int and `double
   precision` from a float, neither of which matches the `integer`/`real`
@@ -229,7 +270,7 @@ Destination photos are seeded placeholders, labelled as illustrative.
 
 ## Status
 
-Backend and frontend complete, 205 tests passing. Verified end-to-end against
+Backend and frontend complete, 222 tests passing. Verified end-to-end against
 live Supabase, Groq, Gemini, Tavily, Geoapify and Wikivoyage: planning, dynamic
 tool selection, multi-hop RAG, memory extraction and cross-session recall,
 clarification, Japanese replies, and the admin trace all confirmed working.
@@ -245,9 +286,27 @@ real Wikipedia photographs, two labelled representative). `GROQ_API_KEY` now
 holds 7 keys; probing them individually is the only way to see which still
 have daily budget, since the headers will not say.
 
+Both are now shown in ordinary conversation as well, not only in a finished
+plan - most conversations never reach one. Advisory turns geocode the options
+they offer: Kerala resolves 4 of 4, New York 1 of 4 (Geoapify has no POI for
+"Catskill Mountains", so those are dropped rather than guessed). Progress is
+streamed over SSE and verified end to end; the local Ollama path is verified
+too - `resolve_provider` routes correctly and a real reply came back in 10.4s
+on `llama3.2:3b`, recorded as `providers=['local']`.
+
+Docs are current as of this pass: README, ARCHITECTURE (new §11 on latency,
+quota and pin honesty), WORKFLOW (timings corrected - a full plan is 1-3
+minutes, not 10-20s), TESTING (§9 rewritten; it still carried the disproven
+tokens-per-minute diagnosis) and `.env.example`.
+
 Live Supabase project: `nlwzlplylmgawangqdhm` (ap-southeast-1), 9 migrations
 applied, RLS verified (an authenticated user cannot escalate to admin and sees
 only their own rows).
 
-Remaining: push to GitHub, deploy to Render + Vercel, and rotate the API keys
-that were shared in chat.
+Remaining, in order: **deploy to Render + Vercel** (the only assignment
+requirement not yet met - pick Render's Singapore region, next to the
+database), push to GitHub, and rotate the API keys that were shared in chat.
+
+Known thin spot: plan steps still run strictly sequentially - `executor_node`
+handles one per graph invocation. Independent research steps could fan out,
+and that is the largest remaining latency win.

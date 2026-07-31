@@ -404,19 +404,30 @@ a fixed order.
 
 ## Roughly how long it takes
 
-| Step | Time |
-|---|---|
-| 1–2 — Identity and memory | under 1s |
-| 3–4 — Understanding | 1–2s |
-| 5 — Planning | 1–2s |
-| 6 — Carrying out the plan | 5–15s (most of the total) |
-| 7 — Reviewing | under 1s per step |
-| 8 — Writing the answer | 2–4s |
-| **Total** | **10–20s** |
-| 9 — Learning | after the reply; nobody waits |
+It depends enormously on which of the three gears the turn runs in, and the
+difference is not a detail — it is the difference between a chat and a wait.
 
-The first request after a quiet period is slower — the free hosting puts the
-service to sleep after 15 minutes and takes half a minute to wake up. A city
-nobody has asked about before is also slower the first time, because its guide
-pages have to be fetched and processed; the second person to ask about that
-city gets a much faster answer.
+| What you asked for | Typical |
+|---|---|
+| A question it can answer directly ("what's the weather in Singapore?") | **3–8s** |
+| A conversational turn — suggestions and a couple of questions back | **5–15s** |
+| A full day-by-day plan | **1–3 minutes** |
+
+A full plan is slow for a reason that is worth stating plainly: it makes
+around fifty requests to the language model and fifty to outside services
+(travel guides, weather, maps, hotels), one after another. Each is about a
+second. Nothing is broken; there is simply a lot of it.
+
+**You can watch it happen.** The interface shows what the agent is doing as it
+does it — which stage it is on, and each lookup as it finishes — with a
+running clock. This matters more than it sounds: before it existed, a
+two-minute plan looked exactly like a crashed page, and people reloaded, which
+threw away all the work and started it again.
+
+Two things make a first request slower. The free hosting puts the service to
+sleep after 15 minutes and takes half a minute to wake up. And a city nobody
+has asked about before has to have its guide pages fetched and processed —
+the second person to ask about that city gets a much faster answer.
+
+Learning what you said (step 9) happens *after* the reply is sent. Nobody
+waits for it.

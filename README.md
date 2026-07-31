@@ -92,6 +92,57 @@ Each retrieval's query is built from the previous one's results:
 Step 2 is impossible without step 1 — the district names are looked up, not
 guessed.
 
+### Shows its work while it works
+
+A full plan is roughly fifty model calls and fifty tool calls. Each one is
+fast, but the total is a minute or two — and a minute of blank screen is
+indistinguishable from a crash. `POST /api/v1/chat/stream` narrates the run
+as it happens:
+
+```
+Reading your message
+Working out a plan · 5 steps
+  ✓ Reading travel guides
+  ✓ Finding places
+  ✓ Checking the weather
+Writing your answer                                    47s
+```
+
+Same body as the plain endpoint in the final event, so nothing needs a second
+request.
+
+### Runs on your own machine when the cloud runs out
+
+Groq's free tier caps **tokens per day**, and that is the one failure a second
+API key cannot fix. With Ollama installed the agent falls back to a local model
+rather than giving up, and every reply is labelled with which one served it —
+`groq`, `local`, or `groq → local` when the budget ran out mid-turn. A switch
+in the composer forces local outright, for working offline or to stop spending
+quota while testing.
+
+Measured on a 4GB laptop GPU: `llama3.2:3b` runs at 47.8 tok/s and emits
+correct tool calls; `llama3.1:8b` is equally correct but six times slower
+because it does not fit in VRAM; `qwen3:4b` produces no tool calls at all and
+cannot drive the executor. Local is a quota fix, not a speed fix.
+
+### Puts places on a map, with photographs
+
+Both appear in ordinary conversation, not only in a finished itinerary — most
+conversations never reach a full plan, and a list of region names is no help
+to someone who does not already know where those regions are.
+
+Pins are checked rather than trusted. Geocoders answer confidently when they
+should not: asked for "Catskill Mountains, New York" the POI geocoder cannot
+find the Catskills and returns *Manhattan*, and a distance check cannot catch
+that because the wrong answer is zero kilometres from where you were looking.
+So the match type and confidence are read, and anything that only resolved the
+qualifier is discarded. Fewer pins, no wrong ones.
+
+Leaflet and OpenStreetMap tiles — no Google Maps key, no card, no quota.
+Photographs come from Wikivoyage, Wikipedia and Wikimedia Commons, all
+keyless, and anything that is not a picture of the exact place is labelled as
+representative rather than passed off as real.
+
 ### Also
 
 - **Asks before guessing.** Too vague to plan? One short clarifying question —
@@ -153,13 +204,44 @@ pip install -e ".[dev]"
 
 | Service | Where | Free tier |
 |---|---|---|
-| **Groq** (LLM) | [console.groq.com](https://console.groq.com) → API Keys | ~1,000 req/day |
+| **Groq** (LLM) | [console.groq.com](https://console.groq.com) → API Keys | **100k tokens/day, per model** — see note |
 | **Google AI Studio** (embeddings) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | generous |
 | **Tavily** (web search) | [app.tavily.com](https://app.tavily.com) | 1,000 credits/mo |
 | **Geoapify** (places) | [myprojects.geoapify.com](https://myprojects.geoapify.com) | 3,000 credits/day |
 | **Supabase** (database + auth) | [supabase.com](https://supabase.com) → New project | 500 MB, 50k users |
 
 Open-Meteo and Wikivoyage need no key.
+
+> **The Groq limit that actually bites is tokens per day, not requests.**
+> 100,000 per model per account, and it appears in *no response header* — the
+> `x-ratelimit-*` headers only describe the per-minute window, so a key can
+> report plenty remaining while being completely out of daily budget. One full
+> plan costs 30–40k. `GROQ_API_KEY` accepts a comma-separated list and keys
+> from separate accounts each get their own allowance.
+
+<details>
+<summary><b>Optional: run it locally with Ollama (no quota at all)</b></summary>
+
+Install [Ollama](https://ollama.com), then:
+
+```bash
+ollama pull llama3.2:3b      # planner, executor, utility — tool calls work
+ollama pull nomic-embed-text # optional, replaces cloud embeddings
+```
+
+Nothing else to configure: `LLM_PROVIDER` defaults to `auto`, which uses Groq
+and falls back to local only when the daily budget is spent. Set it to `local`
+to stay off the cloud entirely, or `groq` to disable the fallback.
+
+Two things worth knowing before you rely on it:
+
+- **It is slower, not faster.** Local is the answer to running out of quota,
+  not to waiting.
+- **It cannot be deployed on a free tier.** Ollama plus a model needs
+  gigabytes of RAM; Render's free instance has 512 MB. This is a
+  development-machine feature. Deployments keep using Groq and Gemini.
+
+</details>
 
 ### 3. Set up Supabase
 
@@ -339,6 +421,7 @@ curl -X POST http://localhost:8000/api/v1/chat \
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/v1/chat` | Send a message |
+| `POST` | `/api/v1/chat/stream` | Same, streamed — progress events, then the reply |
 | `GET` | `/api/v1/sessions` | List your conversations |
 | `GET` | `/api/v1/sessions/{id}` | One conversation with messages |
 | `DELETE` | `/api/v1/sessions/{id}` | Archive a conversation |
@@ -388,7 +471,7 @@ The unit suite:
 
 ```bash
 cd backend
-PYTHONIOENCODING=utf-8 pytest -q                     # 122 tests
+PYTHONIOENCODING=utf-8 pytest -q                     # 222 tests
 pytest --cov=app --cov-report=term-missing
 pytest tests/unit/test_memory_consolidation.py -v    # the memory pipeline
 ```

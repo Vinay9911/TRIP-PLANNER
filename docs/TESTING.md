@@ -16,6 +16,9 @@ makes. Written so you can check the work rather than take it on trust.
 7. [Test the frontend](#7-test-the-frontend)
 8. [Verify each claim individually](#8-verify-each-claim-individually)
 9. [Understanding rate limits](#9-understanding-rate-limits)
+   - [9.1 Test the local-model fallback](#91-test-the-local-model-fallback)
+   - [9.2 Watch a run as it happens](#92-watch-a-run-as-it-happens)
+   - [9.3 Check the map and the photographs](#93-check-the-map-and-the-photographs)
 10. [Troubleshooting](#10-troubleshooting)
 
 ---
@@ -66,7 +69,7 @@ If the database check fails, see [Troubleshooting](#10-troubleshooting).
 
 ## 3. Run the unit tests
 
-122 tests. No network, no database, no API keys — so they are fast and cannot
+222 tests. No network, no database, no API keys — so they are fast and cannot
 fail because a third party had a bad afternoon.
 
 ```bash
@@ -283,45 +286,118 @@ query that forgot its `WHERE` clause would still return only your rows.
 
 ## 9. Understanding rate limits
 
-**The binding constraint is tokens per minute, not requests per day.**
+**The binding constraint is tokens per DAY, per model.** An earlier version of
+this document said tokens per minute. That was wrong, and it is worth
+explaining why the mistake was easy to make.
 
-Measured from the live Groq API:
+Measured against the live Groq API:
 
-| Model | Tokens/min | Requests/day |
+| Limit | Value | Reported in a header? |
 |---|---|---|
-| `llama-3.3-70b-versatile` | **12,000** | 1,000 |
-| `openai/gpt-oss-120b` | 8,000 | 1,000 |
-| `llama-3.1-8b-instant` | 6,000 | 14,400 |
+| Tokens per **day**, per model, per account | **100,000** | **No** |
+| Tokens per minute, `llama-3.3-70b-versatile` | 12,000 | Yes |
+| Tokens per minute, `openai/gpt-oss-120b` | 8,000 | Yes |
+| Tokens per minute, `llama-3.1-8b-instant` | 6,000 | Yes |
 
-A full itinerary costs **30,000–50,000 tokens**, because the executor resends
-its tool schemas and accumulated findings on every reasoning round trip. So one
-run can exceed a single key's per-minute budget, while barely touching the
-daily request allowance.
-
-**Each key adds its own 12,000 tokens/minute** — verified experimentally:
-spending 2,109 tokens on one key left the other's counter completely
-untouched. So:
-
-| Keys | Tokens/min | Realistic throughput |
-|---|---|---|
-| 1 | 12,000 | one run, then wait |
-| 2 | 24,000 | one run comfortably; back-to-back runs stall |
-| **4** | **48,000** | **back-to-back runs work** |
-| 6 | 72,000 | comfortable for a demo with several users |
-
-Add them comma-separated — keys from **separate Groq accounts**, since keys on
-one account share a quota:
+The `x-ratelimit-*` headers describe **only the per-minute window**. A key can
+therefore report "11,959 tokens remaining" while being completely out of daily
+budget — which is exactly how the wrong diagnosis happened. The daily figure
+appears in one place only: the body of the 429.
 
 ```
-GROQ_API_KEY=gsk_first,gsk_second,gsk_third,gsk_fourth
+Rate limit reached ... on tokens per day (TPD): Limit 100000, Used 96696
 ```
 
-`scripts/verify_setup.py` reports your combined budget and estimated
-throughput.
+A full itinerary costs **30,000–40,000 tokens**, so a single account affords
+roughly **three plans per day per model**. The reset is a rolling 24-hour
+window, not a calendar day — nothing frees up at midnight.
 
-When every key is momentarily spent, the agent says so plainly — *"I hit my
-request limit part-way through planning, try again in a minute"* — rather than
-blaming the travel data sources, which answered fine.
+Three things follow, and all three are implemented:
+
+- **Keys from separate accounts each get their own 100,000.** Comma-separate
+  them; keys on one account share a quota.
+
+  ```
+  GROQ_API_KEY=gsk_first,gsk_second,gsk_third
+  ```
+
+- **The budget is per model**, so an exhausted bucket is escaped by changing
+  model, not key — `models_for_role` walks a fallback chain.
+- **When every model on every key is spent**, `LLM_PROVIDER=auto` moves to a
+  local Ollama model rather than failing the turn (§9.1).
+
+To see which of your keys still have budget, probe them individually — the
+headers will not tell you:
+
+```bash
+./.venv/Scripts/python.exe ../scripts/verify_setup.py
+```
+
+When the agent does run out, it says so plainly rather than blaming the travel
+data sources, which answered fine.
+
+### 9.1 Test the local-model fallback
+
+Requires [Ollama](https://ollama.com) and `ollama pull llama3.2:3b`.
+
+1. Tick **Local model** in the composer (next to *Include*), or send
+   `"local_only": true` on the request.
+2. Send any message. The reply's badge should read **local**, and it will be
+   noticeably slower than Groq.
+3. Check the response body: `llm_providers` should be `["local"]`.
+
+To watch the automatic fallback instead, leave the switch off and exhaust the
+cloud budget — the badge then reads `groq → local` for the turn where it
+switched.
+
+---
+
+## 9.2 Watch a run as it happens
+
+The plain endpoint returns nothing until the whole turn finishes. The
+streaming one narrates it:
+
+```bash
+curl -N -X POST http://localhost:8000/api/v1/chat/stream   -H "Authorization: Bearer $TOKEN"   -H "Content-Type: application/json"   -d '{"message": "Plan 2 days in Jaipur in mid-August"}'
+```
+
+`-N` matters — without it curl buffers and you see everything at once, which
+defeats the point. Expect:
+
+```
+data: {"kind": "stage", "message": "Reading your message"}
+data: {"kind": "stage", "message": "Working out a plan", "detail": "5 steps"}
+data: {"kind": "tool", "message": "Reading travel guides", ...}
+data: {"kind": "tool", "message": "Checking the weather", ...}
+data: {"kind": "done", "result": { ...the full ChatResponse... }}
+```
+
+In the UI this is the panel under the composer, with a running clock.
+
+---
+
+## 9.3 Check the map and the photographs
+
+Both appear in ordinary conversation now, not only in a finished plan.
+
+**In a conversational turn.** Send `I want to go to Kerala`. The reply should
+carry `suggested_places` with coordinates, and the UI shows the options as
+photo cards above a map.
+
+**In a full plan.** Send `Plan 2 days in Jaipur in mid-August`. The itinerary
+opens with its map already expanded, pins numbered to match the stop cards.
+
+**The thing actually worth checking is that no pin is wrong.** Pick any pin
+well away from the others and confirm it belongs there. Regression tests cover
+the three failures found so far:
+
+```bash
+PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m pytest     tests/unit/test_geocoding_distance.py -v
+```
+
+Expect fewer pins on regional destinations ("Catskill Mountains" cannot be
+resolved and is dropped) and none in the wrong country. That trade is
+deliberate.
 
 ---
 
