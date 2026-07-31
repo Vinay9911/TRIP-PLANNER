@@ -35,7 +35,7 @@ import {
   EmptyState,
   ErrorBanner,
   PageHeader,
-  PlaceImage,
+  DecorativeArt,
 } from "@/components/ui";
 import { ApiError, api, type Memory, type SessionSummary } from "@/lib/api";
 
@@ -249,7 +249,7 @@ function Dashboard({ session }: { session: { email: string | null; isAdmin: bool
                       href={`/chat?session=${s.id}`}
                       className="group overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)]"
                     >
-                      <PlaceImage
+                      <DecorativeArt
                         name={s.destination ?? s.id}
                         width={240}
                         height={160}

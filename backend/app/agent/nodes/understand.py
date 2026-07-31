@@ -27,6 +27,7 @@ question; assume the near future, say so, and let the traveller correct it.
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -151,6 +152,16 @@ class Understanding(BaseModel):
             "planning: 'flights' ('flights to Tokyo in November'), 'stays' "
             "('find me a hotel in Kochi'), 'restaurants', 'attractions', or "
             "'weather'. Use 'none' when they are planning or discussing a trip."
+        ),
+    )
+    asks_for_nothing: bool = Field(
+        default=False,
+        description=(
+            "True when the message makes no request at all - a greeting "
+            "('hi', 'hello buddy'), thanks, an acknowledgement ('ok', 'nice'), "
+            "or a remark about the conversation itself. False whenever the "
+            "message asks for, changes, or supplies anything about the trip, "
+            "however briefly ('make day 2 lighter', 'from Delhi', '5 days')."
         ),
     )
     needs_clarification: bool = Field(
@@ -380,6 +391,35 @@ async def understand_node(
             ),
         )
 
+    # A message that asks for nothing gets an answer, not a pipeline.
+    #
+    # Once a traveller confirms an outline, `outline_confirmed` sticks so that
+    # follow-up edits refine the trip rather than restarting the conversation.
+    # The cost of that was every later message planning, including ones that
+    # were not requests: typing "heloo buddy" into a Lucknow conversation
+    # produced a complete two-day itinerary. Absurd to read, and it spent tens
+    # of thousands of tokens on a greeting.
+    #
+    # Answered here, in code, with no second model call - the reply is a fact
+    # about the conversation's own state, and asking a model to write it would
+    # cost more than the turn is worth.
+    if understanding.asks_for_nothing and effective_destination:
+        greeting = _acknowledge(effective_destination, trip_state)
+        return AgentState(
+            goal=understanding.goal,
+            mode="clarify",
+            trip_state=trip_state,
+            destination=effective_destination,
+            detected_language=understanding.detected_language,
+            constraints=merged_constraints,
+            memory_block=memory_block,
+            memory_ids=memory_ids,
+            needs_clarification=True,
+            clarifying_question=greeting,
+            status="clarifying",
+            final_response=greeting,
+        )
+
     # "find me flights to london" -> "from delhi" is one request spread over
     # two turns. The second turn doesn't repeat "flights", so without this
     # the scoped ask would be lost and the follow-up would fall through to
@@ -591,3 +631,39 @@ def _merge_constraints(from_memory: list[str], from_message: list[str]) -> list[
             merged.append(constraint.strip())
 
     return merged
+
+
+def _acknowledge(destination: str, trip_state: dict[str, Any]) -> str:
+    """Reply to a message that asked for nothing.
+
+    Says where the conversation has got to and offers the obvious next step,
+    so a greeting is answered like a greeting instead of triggering a plan.
+
+    Composed from the slot ledger rather than by a model: the content is
+    entirely a fact about state this function already has, and spending a call
+    to phrase it would cost more than the turn is worth.
+
+    Args:
+        destination: Where the trip is, known by this point.
+        trip_state: The conversation's slot ledger.
+
+    Returns:
+        One friendly sentence, plus a concrete offer.
+    """
+    duration = trip_state.get("duration_days")
+    window = trip_state.get("travel_window") or trip_state.get("start_date")
+
+    where = f"We're on **{destination}**"
+    if duration and window:
+        where += f" — {duration} days, {window}"
+    elif duration:
+        where += f" — {duration} days"
+
+    if trip_state.get("outline_confirmed"):
+        offer = "Want me to change anything, or shall I look at flights, stays or food? ✈️"
+    elif duration and window:
+        offer = 'Say "just plan it" and I\'ll build the day-by-day plan. 🗺️'
+    else:
+        offer = "Tell me how long you have and roughly when, and I'll plan it properly. 📅"
+
+    return f"Hey! 👋 {where}.\n\n{offer}"

@@ -15,6 +15,7 @@ rather than "expected 'plan', got 'advise'".
 from __future__ import annotations
 
 from app.agent.graph import route_after_understand
+from app.agent.nodes.understand import _acknowledge
 from app.agent.state import AgentState, initial_state
 from app.agent.trip_state import (
     FOCUS_SERVICES,
@@ -499,3 +500,35 @@ def test_flights_without_an_origin_still_clarify() -> None:
         )
         == "clarify"
     )
+
+
+def test_a_greeting_does_not_rebuild_the_trip() -> None:
+    """"heloo buddy" produced a complete two-day itinerary.
+
+    Once an outline is confirmed the flag sticks, so that later edits refine
+    the trip instead of restarting the conversation. The cost was that every
+    subsequent message planned - including messages that were not requests.
+    A greeting cost tens of thousands of tokens and returned an itinerary
+    nobody had asked for.
+
+    The composed acknowledgement is checked rather than the mode, because what
+    matters is that the traveller gets a sentence back, not a pipeline.
+    """
+    reply = _acknowledge("Lucknow", {"outline_confirmed": True, "duration_days": 2})
+
+    assert "Lucknow" in reply
+    assert len(reply) < 200, "an answer to 'hello' should be one line, not an itinerary"
+
+
+def test_the_acknowledgement_offers_the_step_that_is_actually_next() -> None:
+    """What to offer depends on what is still missing, so it is derived.
+
+    A traveller who has not said how long they have needs a different prompt
+    from one who has - offering "just plan it" to someone the planner would
+    immediately have to interrogate is a dead end.
+    """
+    unspecified = _acknowledge("Kyoto", {})
+    ready = _acknowledge("Kyoto", {"duration_days": 3, "travel_window": "March"})
+
+    assert "how long" in unspecified.lower()
+    assert "just plan it" in ready.lower()

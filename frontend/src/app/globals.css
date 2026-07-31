@@ -131,6 +131,29 @@ body {
   animation: rise-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* For a backdrop, which should arrive without moving: the panel above it
+   rises, and having both travel at once reads as the whole screen lurching. */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.fade-in {
+  animation: fade-in 160ms ease-out both;
+}
+
+/* Respect the system preference. Motion here is decoration on top of an
+   interface that works without it, so there is nothing to preserve when
+   somebody has asked for less of it. */
+@media (prefers-reduced-motion: reduce) {
+  .rise-in,
+  .fade-in,
+  .typing-dot,
+  .skeleton::after {
+    animation: none;
+  }
+}
+
 /* Shimmer for skeletons, used instead of a blocking spinner for waits over
    about a second. */
 @keyframes shimmer {

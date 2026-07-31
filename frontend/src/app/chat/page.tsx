@@ -32,6 +32,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ItineraryView } from "@/components/Itinerary";
 import { PlaceMap, type MappedItem } from "@/components/PlaceMap";
+import { PlacePhoto } from "@/components/PlacePhoto";
 import { AuthGate } from "@/components/AuthGate";
 import {
   IconBed,
@@ -57,7 +58,7 @@ import {
   Card,
   ErrorBanner,
   FormattedText,
-  PlaceImage,
+  DecorativeArt,
 } from "@/components/ui";
 import {
   ApiError,
@@ -500,7 +501,7 @@ function Welcome({
                 {capability.hint}
               </span>
               {big && (
-                <PlaceImage
+                <DecorativeArt
                   name={capability.art}
                   width={420}
                   height={260}
@@ -563,7 +564,7 @@ function TripBar({ trip }: { trip: TripState }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)]/80 px-3 py-2 text-xs backdrop-blur">
       {trip.destination && (
-        <PlaceImage
+        <DecorativeArt
           name={trip.destination}
           width={48}
           height={48}
@@ -624,6 +625,7 @@ function Message({
               latitude: number;
               longitude: number;
             }[]}
+            destination={meta.destination ?? ""}
             onPick={onPickOption}
           />
         )}
@@ -917,13 +919,20 @@ function ActionChips({
 function OptionGallery({
   options,
   places,
+  destination,
   onPick,
 }: {
   options: string[];
   places: { name: string; latitude: number; longitude: number }[];
+  destination: string;
   onPick: (text: string) => void;
 }) {
   const [showMap, setShowMap] = useState(true);
+  const [zoomed, setZoomed] = useState<{
+    name: string;
+    place?: { name: string; latitude: number; longitude: number };
+  } | null>(null);
+  const onZoom = setZoomed;
   const byName = new Map(places.map((place) => [place.name, place]));
 
   // Only pinned options are numbered - a number beside a card with no pin
@@ -974,33 +983,133 @@ function OptionGallery({
         {/* Staggered 45ms apart: enough that the eye reads the gallery
             assembling as a sequence, short enough that the last card has
             landed before anyone is waiting on it. */}
-        {options.map((option, position) => (
-          <button
-            key={option}
-            type="button"
-            onClick={() => onPick(`Let's do ${option}`)}
-            style={{ animationDelay: `${position * 45}ms` }}
-            className="rise-in group overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] text-left transition-[border-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)] hover:shadow-[0_12px_28px_-20px_rgb(44_31_43_/_0.55)]"
-          >
-            <div className="relative h-24 w-full overflow-hidden">
-              <PlaceImage
-                name={option}
-                width={320}
-                height={200}
-                className="h-24 w-full object-cover transition-transform duration-500 group-hover:scale-105"
-              />
-              {numberOf.has(option) && (
-                <span className="absolute left-2 top-2 grid size-5 place-items-center rounded-full bg-[var(--color-brand-strong)] text-[10px] font-semibold text-white">
-                  {numberOf.get(option)}
-                </span>
-              )}
+        {options.map((option, position) => {
+          const place = byName.get(option);
+          return (
+            <div
+              key={option}
+              style={{ animationDelay: `${position * 45}ms` }}
+              className="rise-in group overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] transition-[border-color,box-shadow] duration-200 hover:border-[var(--color-brand)] hover:shadow-[0_12px_28px_-20px_rgb(44_31_43_/_0.55)]"
+            >
+              {/* Looking and choosing are different intentions and now have
+                  different targets. Tapping a photograph used to send "Let's
+                  do Lucknow", which committed the whole trip to one city when
+                  all the traveller wanted was a closer look at the picture. */}
+              <button
+                type="button"
+                onClick={() => onZoom({ name: option, place })}
+                aria-label={`See ${option}`}
+                className="relative block h-28 w-full overflow-hidden"
+              >
+                <PlacePhoto
+                  name={option}
+                  destination={destination}
+                  latitude={place?.latitude ?? null}
+                  longitude={place?.longitude ?? null}
+                  kind="neighbourhood"
+                  className="h-28 w-full transition-transform duration-500 group-hover:scale-105"
+                />
+                {numberOf.has(option) && (
+                  <span className="absolute left-2 top-2 grid size-5 place-items-center rounded-full bg-[var(--color-brand-strong)] text-[10px] font-semibold text-white">
+                    {numberOf.get(option)}
+                  </span>
+                )}
+              </button>
+
+              <div className="flex items-center justify-between gap-2 px-3 py-2">
+                <span className="truncate text-xs font-medium">{option}</span>
+                <button
+                  type="button"
+                  onClick={() => onPick(`Let's do ${option}`)}
+                  className="shrink-0 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
+                >
+                  Choose
+                </button>
+              </div>
             </div>
-            <span className="flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium">
-              {option}
-              <IconChevron size="0.9em" className="-rotate-90 opacity-40" />
-            </span>
-          </button>
-        ))}
+          );
+        })}
+      </div>
+
+      {zoomed && (
+        <PlaceLightbox
+          name={zoomed.name}
+          destination={destination}
+          place={zoomed.place}
+          onClose={() => setZoomed(null)}
+          onPick={() => {
+            setZoomed(null);
+            onPick(`Let's do ${zoomed.name}`);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A place, larger, without committing to it.
+ *
+ * The counterpart to splitting look from choose. Escape and a click outside
+ * both dismiss, because a viewer that traps you is worse than no viewer, and
+ * the one action that *does* commit is spelled out on a button rather than
+ * being what happens when you touch the picture.
+ */
+function PlaceLightbox({
+  name,
+  destination,
+  place,
+  onClose,
+  onPick,
+}: {
+  name: string;
+  destination: string;
+  place?: { name: string; latitude: number; longitude: number };
+  onClose: () => void;
+  onPick: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={name}
+      onClick={onClose}
+      className="fade-in fixed inset-0 z-50 grid place-items-center bg-black/55 p-4 backdrop-blur-sm"
+    >
+      <div
+        onClick={(event) => event.stopPropagation()}
+        className="rise-in w-full max-w-lg overflow-hidden rounded-2xl bg-[var(--color-surface)] shadow-2xl"
+      >
+        <PlacePhoto
+          name={name}
+          destination={destination}
+          latitude={place?.latitude ?? null}
+          longitude={place?.longitude ?? null}
+          kind="neighbourhood"
+          className="h-64 w-full rounded-none"
+        />
+        <div className="flex items-center justify-between gap-3 p-4">
+          <div className="min-w-0">
+            <p className="truncate font-display text-base font-semibold">{name}</p>
+            <p className="text-xs text-[var(--color-ink-faint)]">
+              {place ? "Pinned on the map above" : "No map pin for this one"}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+            <Button onClick={onPick}>Plan this</Button>
+          </div>
+        </div>
       </div>
     </div>
   );

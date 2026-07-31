@@ -35,6 +35,7 @@ import {
   IconTicket,
 } from "@/components/icons";
 import { PlaceMap, dayColor, type MappedItem } from "@/components/PlaceMap";
+import { PlacePhoto } from "@/components/PlacePhoto";
 import { Badge, Card } from "@/components/ui";
 import { api, type Itinerary, type ItineraryDay, type ItineraryItem } from "@/lib/api";
 
@@ -71,89 +72,6 @@ const SLOTS = [
  * Renders a shimmering placeholder of the right aspect ratio while loading,
  * so the surrounding layout never jumps when the image lands.
  */
-function ItemPhoto({
-  name,
-  destination,
-  latitude,
-  longitude,
-  kind,
-  className = "",
-}: {
-  name: string;
-  destination: string;
-  latitude: number | null;
-  longitude: number | null;
-  kind: string;
-  className?: string;
-}) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [representative, setRepresentative] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const holder = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const node = holder.current;
-    if (!node) return;
-
-    let cancelled = false;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (!entries[0]?.isIntersecting) return;
-        observer.disconnect();
-        api
-          .placeImage({ name, destination, latitude, longitude, kind })
-          .then((image) => {
-            if (cancelled) return;
-            setUrl(image.url);
-            setRepresentative(image.is_representative);
-          })
-          .catch(() => {
-            // A missing photo is a cosmetic loss - leave the space blank
-            // rather than surfacing an error next to a perfectly good plan.
-            if (!cancelled) setFailed(true);
-          });
-      },
-      { rootMargin: "200px" },
-    );
-
-    observer.observe(node);
-    return () => {
-      cancelled = true;
-      observer.disconnect();
-    };
-  }, [name, destination, latitude, longitude, kind]);
-
-  if (failed) return null;
-
-  return (
-    <div ref={holder} className={`relative overflow-hidden rounded-xl ${className}`}>
-      {url ? (
-        <>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={url}
-            alt=""
-            aria-hidden
-            loading="lazy"
-            className="h-full w-full object-cover"
-            onError={() => setFailed(true)}
-          />
-          {representative && (
-            <span
-              title="A similar place, not a photo of this exact one."
-              className="absolute bottom-1 right-1 rounded-md bg-black/55 px-1.5 py-0.5 text-[9px] font-medium text-white"
-            >
-              similar
-            </span>
-          )}
-        </>
-      ) : (
-        <div className="skeleton h-full w-full" />
-      )}
-    </div>
-  );
-}
-
 function Item({
   item,
   destination,
@@ -180,7 +98,7 @@ function Item({
         active ? "bg-[var(--color-brand-soft)]" : "hover:bg-[var(--color-surface-2)]"
       }`}
     >
-      <ItemPhoto
+      <PlacePhoto
         name={item.name}
         destination={destination}
         latitude={item.latitude}
@@ -376,7 +294,7 @@ export function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
       </div>
       {itinerary.intro && (
         <Card className="flex gap-3 overflow-hidden">
-          <ItemPhoto
+          <PlacePhoto
             name={destination}
             destination={destination}
             latitude={null}

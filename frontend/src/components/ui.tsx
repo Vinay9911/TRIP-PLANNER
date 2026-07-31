@@ -262,7 +262,7 @@ export function StatusBadge({ status }: { status: string }) {
  * to tell at a glance which parts of this app are real data and which are
  * illustrative.
  */
-export function PlaceImage({
+export function DecorativeArt({
   name,
   className = "",
   width = 400,
