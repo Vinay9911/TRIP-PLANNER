@@ -946,7 +946,7 @@ function OptionGallery({
 
   return (
     <div className="mt-3 space-y-2.5">
-      {mapped.length > 1 && (
+      {mapped.length > 0 && (
         <>
           <button
             type="button"
@@ -955,7 +955,7 @@ function OptionGallery({
             className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-3 text-xs font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
           >
             <IconPin size="0.95em" />
-            {showMap ? "Hide map" : `Show these on a map (${mapped.length})`}
+            {showMap ? "Hide map" : `Show on map (${mapped.length})`}
           </button>
 
           <div
@@ -971,12 +971,16 @@ function OptionGallery({
       )}
 
       <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-        {options.map((option) => (
+        {/* Staggered 45ms apart: enough that the eye reads the gallery
+            assembling as a sequence, short enough that the last card has
+            landed before anyone is waiting on it. */}
+        {options.map((option, position) => (
           <button
             key={option}
             type="button"
             onClick={() => onPick(`Let's do ${option}`)}
-            className="group overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] text-left transition-[border-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)] hover:shadow-[0_12px_28px_-20px_rgb(44_31_43_/_0.55)]"
+            style={{ animationDelay: `${position * 45}ms` }}
+            className="rise-in group overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] text-left transition-[border-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)] hover:shadow-[0_12px_28px_-20px_rgb(44_31_43_/_0.55)]"
           >
             <div className="relative h-24 w-full overflow-hidden">
               <PlaceImage

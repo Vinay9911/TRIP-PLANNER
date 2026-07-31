@@ -33,6 +33,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from app.agent.places import extract_places
 from app.agent.state import AgentState
 from app.agent.trip_state import disabled_services, missing_slots
 from app.core.config import Settings, get_settings
@@ -193,12 +194,20 @@ async def advisor_node(
         grounded=bool(guide_block),
     )
 
+    # What to show is taken from the answer, not from the retrieval that fed
+    # it. The district list is inconsistent as a source of visuals - measured,
+    # it gives Kyoto six real areas, Jaipur the single themed page "Forts and
+    # palaces", and Goa nothing at all - and a theme cannot be photographed or
+    # pinned, which is how a reply about Jaipur ended up with one stock photo
+    # of clouds and no map. The prose named City Palace and two temples.
+    shown = await extract_places(answer, destination, settings=cfg) or suggested_options
+
     return AgentState(
         final_response=answer,
         status="completed",
         trip_state=trip_state,
-        suggested_options=suggested_options,
-        suggested_places=await _locate_options(suggested_options, destination, settings=cfg),
+        suggested_options=shown,
+        suggested_places=await _locate_options(shown, destination, settings=cfg),
         messages=[AIMessage(content=answer)],
     )
 

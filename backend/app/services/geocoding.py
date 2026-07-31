@@ -58,11 +58,20 @@ _QUALIFIER_ONLY_MATCHES = frozenset(
     {"match_by_city_or_disrict", "match_by_country_or_state", "match_by_postcode"}
 )
 
-#: Below this, Geoapify is guessing. Measured: a real landmark match scores
-#: 0.7-1.0, while the city-fallback results that produced wrong pins scored
-#: 0.25 and 0. Set at 0.5 to sit clearly between the two rather than tuned to
-#: the edge of either.
-MIN_MATCH_CONFIDENCE: float = 0.5
+#: How many candidates to ask for, so the nearest can be chosen.
+#:
+#: This is what actually resolves landmarks correctly, and it replaced a
+#: confidence threshold that was calibrated on a coincidence. Measured for
+#: "Birla Temple, Jaipur": the **correct** temple 4km away scores confidence
+#: **0**, while two wrong ones 334km and 354km away both score 0.67. Same for
+#: "Hawa Mahal" - the right answer, one kilometre out, scores 0. Confidence
+#: does not rank POIs by correctness, and thresholding on it threw away real
+#: temples while admitting distant impostors.
+#:
+#: Proximity does rank them. When the destination is known, the nearest
+#: plausible match is the right one, and `MAX_PIN_DISTANCE_KM` still bounds
+#: how wrong "nearest" is allowed to be.
+LANDMARK_CANDIDATES = 5
 
 #: Geoapify result types acceptable as a *destination centre*.
 #:
@@ -259,7 +268,7 @@ async def geocode_landmark(
         return None
 
     query = f"{name}, {near}" if near else name
-    params = {"text": query, "limit": "1", "apiKey": key}
+    params = {"text": query, "limit": str(LANDMARK_CANDIDATES), "apiKey": key}
 
     if centre is not None:
         # Geoapify orders bias coordinates lon,lat - the opposite of the
@@ -279,49 +288,56 @@ async def geocode_landmark(
         logger.info("geocoding.landmark_failed", name=name)
         return None
 
-    features = payload.get("features") or []
-    if not features:
-        return None
+    # Each source ranks what it is actually good at: Geoapify's order decides
+    # *relevance*, and the distance check decides *plausibility*. Reversing
+    # that - picking the candidate nearest the centre - was tried and is
+    # worse: it beats a good relevance ranking with raw proximity and moved
+    # Amber Fort, which is genuinely 10km outside Jaipur, onto a nearer place
+    # 15km from the real fort. So: walk their order, take the first that
+    # survives both filters.
+    rejected: tuple[str, float] | None = None
 
-    properties = features[0].get("properties") or {}
-    latitude, longitude = properties.get("lat"), properties.get("lon")
-    if latitude is None or longitude is None:
-        return None
+    for feature in payload.get("features") or []:
+        properties = feature.get("properties") or {}
+        latitude, longitude = properties.get("lat"), properties.get("lon")
+        if latitude is None or longitude is None:
+            continue
 
-    # Geoapify says *what* it matched, and that is the difference between a
-    # pin and a lie. Asked for "Catskill Mountains, New York" it cannot find
-    # the Catskills, so it falls back to the part it does recognise - the
-    # city - and returns Manhattan with match_type=match_by_city_or_disrict
-    # and confidence 0.25. The coordinate is real, the answer is wrong, and a
-    # distance check cannot catch it because the wrong answer is by
-    # construction *next to* the place we biased towards.
-    #
-    # So a match that only resolved the qualifier is no match at all.
-    rank = properties.get("rank") or {}
-    match_type = rank.get("match_type")
-    if match_type in _QUALIFIER_ONLY_MATCHES:
-        logger.info("geocoding.landmark_unmatched", name=name, match_type=match_type)
-        return None
+        # Geoapify says *what* it matched, and that is the difference between
+        # a pin and a lie. Asked for "Catskill Mountains, New York" it cannot
+        # find the Catskills, so it falls back to the part it does recognise -
+        # the city - and returns Manhattan with
+        # match_type=match_by_city_or_disrict. The coordinate is real, the
+        # answer is wrong, and no distance check can catch it because the
+        # wrong answer is by construction *next to* the place being searched.
+        #
+        # A match that only resolved the qualifier is no match at all.
+        if (properties.get("rank") or {}).get("match_type") in _QUALIFIER_ONLY_MATCHES:
+            continue
 
-    confidence = rank.get("confidence")
-    if confidence is not None and float(confidence) < MIN_MATCH_CONFIDENCE:
-        logger.info("geocoding.landmark_low_confidence", name=name, confidence=confidence)
-        return None
+        found = (float(latitude), float(longitude))
 
-    found = (float(latitude), float(longitude))
+        if centre is None:
+            return found
 
-    # The bias is only a preference - Geoapify still answers with its best
-    # global match when nothing near the centre fits. This is the part that
-    # actually enforces plausibility.
-    if centre is not None:
         separation = distance_km(centre, found)
-        if separation > MAX_PIN_DISTANCE_KM:
-            logger.info(
-                "geocoding.landmark_rejected",
-                name=name,
-                distance_km=round(separation),
-                limit_km=MAX_PIN_DISTANCE_KM,
-            )
-            return None
+        if separation <= MAX_PIN_DISTANCE_KM:
+            return found
 
-    return found
+        # Remembered only so the log can say how far out the best match was,
+        # which is the difference between "no such place" and "the geocoder
+        # sent us to another country".
+        if rejected is None:
+            rejected = (name, separation)
+
+    if rejected is not None:
+        logger.info(
+            "geocoding.landmark_rejected",
+            name=name,
+            distance_km=round(rejected[1]),
+            limit_km=MAX_PIN_DISTANCE_KM,
+        )
+    else:
+        logger.info("geocoding.landmark_unmatched", name=name)
+
+    return None

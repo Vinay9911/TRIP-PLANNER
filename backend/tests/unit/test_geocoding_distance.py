@@ -164,11 +164,21 @@ async def test_a_city_fallback_match_is_not_a_pin(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_a_low_confidence_match_is_not_a_pin(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Confidence 0 with a plausible coordinate is still a guess.
+async def test_a_distant_candidate_is_skipped_for_a_plausible_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Birla Temple case, and why confidence was the wrong signal.
 
-    Measured: real landmark matches score 0.7-1.0, and the results that put
-    the Adirondacks in Manhattan scored 0.
+    This replaces a test that rejected matches scoring below a confidence
+    threshold. That rule was calibrated on a coincidence and is measurably
+    wrong: asked for "Birla Temple, Jaipur", Geoapify returns the **correct**
+    temple 4km away with confidence **0**, while two wrong temples 334km and
+    354km away both score 0.67. "Hawa Mahal" behaves the same way.
+    Thresholding on confidence discarded real landmarks and kept impostors.
+
+    What works is walking the geocoder's own order and taking the first
+    candidate that is geographically plausible - their ranking for relevance,
+    ours for sanity. The distant entries here are listed first on purpose.
     """
     monkeypatch.setattr(
         geocoding,
@@ -178,17 +188,65 @@ async def test_a_low_confidence_match_is_not_a_pin(monkeypatch: pytest.MonkeyPat
                 "features": [
                     {
                         "properties": {
-                            "lat": 40.7093,
-                            "lon": -74.0090,
+                            "lat": 25.5186,
+                            "lon": 78.7537,
+                            "rank": {"confidence": 0.67, "match_type": "full_match"},
+                        }
+                    },
+                    {
+                        "properties": {
+                            "lat": 29.9658,
+                            "lon": 76.8273,
+                            "rank": {"confidence": 0.67, "match_type": "full_match"},
+                        }
+                    },
+                    {
+                        "properties": {
+                            "lat": 26.8922,
+                            "lon": 75.8155,
                             "rank": {"confidence": 0.0, "match_type": "full_match"},
                         }
-                    }
+                    },
                 ]
             }
         ),
     )
 
-    assert await geocode_landmark("Finger Lakes", near="New York") is None
+    assert await geocode_landmark("Birla Temple", near="Jaipur", centre=JAIPUR) == (
+        26.8922,
+        75.8155,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_geocoders_own_ranking_is_respected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Among plausible candidates, first beats nearest.
+
+    Picking the nearest instead was tried and is worse. Amber Fort is
+    genuinely about 10km outside Jaipur, and preferring proximity moved it to
+    a closer match 15km from the real fort - beating a good relevance ranking
+    with raw distance. Both candidates below are within the limit, so the
+    geocoder's order decides.
+    """
+    monkeypatch.setattr(
+        geocoding,
+        "request_json",
+        lambda *a, **k: _async(
+            {
+                "features": [
+                    {"properties": {"lat": 26.9855, "lon": 75.8513, "rank": {}}},
+                    {"properties": {"lat": 26.8498, "lon": 75.7999, "rank": {}}},
+                ]
+            }
+        ),
+    )
+
+    assert await geocode_landmark("Amber Fort", near="Jaipur", centre=JAIPUR) == (
+        26.9855,
+        75.8513,
+    )
 
 
 @pytest.mark.asyncio
