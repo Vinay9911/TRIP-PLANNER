@@ -42,6 +42,7 @@ from app.core.logging import bind_request_context, get_logger
 from app.db.repositories import SessionRepository, TraceRepository
 from app.memory.service import MemoryService
 from app.rag.retriever import MultiHopRetriever
+from app.services.progress import emit
 from app.services.usage import (
     TokenUsage,
     active_providers,
@@ -86,6 +87,7 @@ class TurnResult:
     mode: str = "plan"
     trip_state: dict[str, Any] = None  # type: ignore[assignment]
     suggested_options: list[str] = None  # type: ignore[assignment]
+    suggested_places: list[dict[str, Any]] = None  # type: ignore[assignment]
     itinerary: dict[str, Any] | None = None
     suggested_actions: list[dict[str, str]] = None  # type: ignore[assignment]
     detected_language: str = "en"
@@ -116,10 +118,52 @@ class TurnResult:
             self.trip_state = {}
         if self.suggested_options is None:
             self.suggested_options = []
+        if self.suggested_places is None:
+            self.suggested_places = []
         if self.suggested_actions is None:
             self.suggested_actions = []
         if self.llm_providers is None:
             self.llm_providers = []
+
+
+#: Traveller-facing wording for each graph node.
+#:
+#: Node names are the wrong register for someone waiting on a holiday, and the
+#: model's own step descriptions are worse ("Retrieve any stored traveller
+#: preferences (e.g., interests, budget...)"). The executor is deliberately
+#: absent: it announces itself through the tools it calls, which is more
+#: specific than anything that could be said about the node as a whole.
+_STAGE_LABELS: dict[str, str] = {
+    "understand": "Reading your message",
+    "clarify": "Working out what to ask",
+    "advise": "Finding options for you",
+    "plan": "Working out a plan",
+    "replan": "Adjusting the plan",
+    "respond": "Writing your answer",
+}
+
+
+def _emit_stage(node: str, patch: Any) -> None:
+    """Narrate one graph node transition.
+
+    Args:
+        node: The node that just produced an update.
+        patch: Its state update, read only for the plan length so the client
+            can show "step 2 of 5" rather than an unbounded spinner.
+    """
+    label = _STAGE_LABELS.get(node)
+    if label is None:
+        return
+
+    data: dict[str, Any] = {"node": node}
+    if node == "plan" and isinstance(patch, dict):
+        steps = patch.get("plan") or []
+        if steps:
+            data["steps"] = len(steps)
+            emit("stage", label, detail=f"{len(steps)} steps", **data)
+            return
+
+    emit("stage", label, **data)
 
 
 def _suggest_actions(
@@ -319,6 +363,7 @@ class AgentRunner:
             mode=final_state.get("mode", "plan"),
             trip_state=dict(final_state.get("trip_state") or {}),
             suggested_options=list(final_state.get("suggested_options") or []),
+            suggested_places=list(final_state.get("suggested_places") or []),
             itinerary=final_state.get("itinerary"),
             suggested_actions=_suggest_actions(final_state, records),
             detected_language=final_state.get("detected_language", "en"),
@@ -405,7 +450,18 @@ class AgentRunner:
         }
 
         try:
-            return await graph.ainvoke(state, config)  # type: ignore[no-any-return]
+            # `astream` rather than `ainvoke` so node transitions can be
+            # narrated as they happen. LangGraph yields one update per node,
+            # which is exactly the progress worth showing and costs nothing
+            # to observe - the final state is the accumulation of the updates,
+            # so nothing is lost by streaming instead of invoking.
+            final: dict[str, Any] = {}
+            async for update in graph.astream(state, config, stream_mode="updates"):
+                for node, patch in update.items():
+                    if isinstance(patch, dict):
+                        final.update(patch)
+                    _emit_stage(node, patch)
+            return final
         except Exception as exc:
             logger.exception("runner.graph_failed", run_id=run_id)
             return AgentState(

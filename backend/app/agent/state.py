@@ -162,6 +162,9 @@ class AgentState(TypedDict, total=False):
     #: render clickable options instead of the traveller having to retype a
     #: name back out of the prose reply. Empty outside advise mode.
     suggested_options: list[str]
+    #: The same options with coordinates, so an advisory turn can be
+    #: mapped and illustrated rather than being a list of bare names.
+    suggested_places: list[dict[str, Any]]
     #: The plan as structured days (see `agent/itinerary.py`), serialised.
     #: Present only for full-trip plans; scoped asks and advisory turns have
     #: nothing to lay out. The interface renders cards, photos and map pins
@@ -235,6 +238,7 @@ def initial_state(
         final_response=None,
         status="running",
         suggested_options=[],
+        suggested_places=[],
         itinerary=None,
         suggested_actions=[],
         stopped_because=None,

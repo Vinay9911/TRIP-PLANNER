@@ -36,7 +36,7 @@ from app.agent.state import AgentState
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
-from app.services.geocoding import geocode_landmark, geocode_place
+from app.services.geocoding import geocode_centre, geocode_landmark
 from app.services.llm import ModelRole, call_model, structured_call
 
 logger = get_logger(__name__)
@@ -397,13 +397,7 @@ async def _add_missing_coordinates(itinerary: Itinerary) -> None:
     if not pending:
         return
 
-    centre: tuple[float, float] | None = None
-    try:
-        place = await geocode_place(itinerary.destination)
-    except ExternalServiceError:
-        place = None
-    if place and place.get("latitude") is not None:
-        centre = (float(place["latitude"]), float(place["longitude"]))
+    centre = await geocode_centre(itinerary.destination)
 
     async def locate(item: ItineraryItem) -> None:
         # Qualified with the destination inside `geocode_landmark`: "Old Town"

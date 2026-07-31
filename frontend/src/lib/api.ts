@@ -119,6 +119,14 @@ export interface ToolCall {
   latency_ms: number;
 }
 
+/** One line of "here is what I am doing", streamed while a turn runs. */
+export interface ProgressEvent {
+  kind: "stage" | "step" | "tool" | "note";
+  message: string;
+  detail?: string;
+  data?: Record<string, unknown>;
+}
+
 export interface ChatResponse {
   session_id: string;
   run_id: string;
@@ -129,6 +137,9 @@ export interface ChatResponse {
   /** Real district/destination names from the advisor's own retrieval -
    *  populated only in "advise" mode. Render as clickable chips. */
   suggested_options: string[];
+  /** The same options with coordinates, so an advisory turn can be mapped and
+   *  illustrated rather than being a list of bare names. */
+  suggested_places: { name: string; latitude: number; longitude: number }[];
   /** The plan as structured days, when this turn produced one. */
   itinerary: Itinerary | null;
   /** Follow-up offers derived server-side from what has not run yet. */
@@ -238,7 +249,8 @@ export class ApiError extends Error {
 // Transport
 // ---------------------------------------------------------------------------
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+/** Bearer token plus JSON content type, or throw if signed out. */
+async function authHeaders(): Promise<Record<string, string>> {
   const {
     data: { session },
   } = await getSupabase().auth.getSession();
@@ -247,13 +259,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError("You are not signed in.", 401, "unauthenticated", false);
   }
 
+  return {
+    Authorization: `Bearer ${session.access_token}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
-    headers: {
-      ...init.headers,
-      Authorization: `Bearer ${session.access_token}`,
-      "Content-Type": "application/json",
-    },
+    headers: { ...init.headers, ...(await authHeaders()) },
   });
 
   if (response.status === 204) return undefined as T;
@@ -299,6 +314,88 @@ export const api = {
         local_only: localOnly ?? false,
       }),
     }),
+
+  /**
+   * Same turn as `chat`, but reports what the agent is doing while it does it.
+   *
+   * `fetch` with a reader rather than `EventSource`, because EventSource only
+   * issues GETs and cannot carry an Authorization header - this endpoint needs
+   * both a JSON body and a bearer token.
+   *
+   * Falls back to nothing clever on failure: the caller catches and can retry
+   * against the plain endpoint, so a proxy that mangles streaming degrades to
+   * the old silent-but-working behaviour rather than breaking chat entirely.
+   */
+  chatStream: async (
+    message: string,
+    options: {
+      sessionId?: string;
+      focus?: FocusService[];
+      localOnly?: boolean;
+      onProgress: (event: ProgressEvent) => void;
+      signal?: AbortSignal;
+    },
+  ): Promise<ChatResponse> => {
+    const response = await fetch(`${API_URL}/api/v1/chat/stream`, {
+      method: "POST",
+      headers: await authHeaders(),
+      signal: options.signal,
+      body: JSON.stringify({
+        message,
+        session_id: options.sessionId ?? null,
+        focus: options.focus ?? null,
+        local_only: options.localOnly ?? false,
+      }),
+    });
+
+    if (!response.ok || !response.body) {
+      throw new ApiError(
+        `The agent could not be reached (${response.status}).`,
+        response.status,
+        "stream_failed",
+        true,
+      );
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let result: ChatResponse | null = null;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE frames are separated by a blank line. A chunk can split one in
+      // half, so the trailing partial frame stays in the buffer.
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+
+      for (const frame of frames) {
+        const line = frame.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        const event = JSON.parse(line.slice(6));
+
+        if (event.kind === "done") {
+          if (event.error) throw new ApiError(event.error, 502, "agent_failed", true);
+          result = event.result as ChatResponse;
+        } else {
+          options.onProgress(event as ProgressEvent);
+        }
+      }
+    }
+
+    if (!result) {
+      throw new ApiError(
+        "The agent stopped without replying.",
+        502,
+        "empty_stream",
+        true,
+      );
+    }
+    return result;
+  },
 
   listSessions: () => request<SessionSummary[]>("/api/v1/sessions"),
 

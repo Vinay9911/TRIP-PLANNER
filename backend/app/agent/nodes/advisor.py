@@ -28,6 +28,9 @@ by the time it runs, the decision that advising is appropriate has been made.
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agent.state import AgentState
@@ -36,6 +39,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError
 from app.core.logging import get_logger
 from app.rag.retriever import MultiHopRetriever
+from app.services.geocoding import geocode_centre, geocode_landmark
 from app.services.llm import ModelRole, call_model
 from app.services.usage import record_rag_hops
 
@@ -194,8 +198,61 @@ async def advisor_node(
         status="completed",
         trip_state=trip_state,
         suggested_options=suggested_options,
+        suggested_places=await _locate_options(suggested_options, destination, settings=cfg),
         messages=[AIMessage(content=answer)],
     )
+
+
+async def _locate_options(
+    names: list[str], destination: str, *, settings: Settings | None = None
+) -> list[dict[str, Any]]:
+    """Put coordinates on the places an advisory turn is offering.
+
+    **Why an advisory turn needs a map at all.** Photographs and pins were
+    wired only to the finished itinerary, which is the rarest thing the agent
+    produces - most conversations are two or three advisory turns that never
+    reach a full plan. So the features existed and almost nobody ever saw
+    them, and the commonest complaint about this app was that it had no
+    pictures and no map. It had both; they were behind the wrong door.
+
+    Offering "the Adirondacks, the Catskills, the Hudson Valley" as three words
+    asks the traveller to already know where those are relative to each other.
+    Three pins answer that instantly, and choosing between regions is exactly
+    the decision this gear exists to support.
+
+    Args:
+        names: Display names the advisor offered.
+        destination: The surrounding place, used to disambiguate and to
+            reject a match on the wrong continent.
+        settings: Settings override, for tests.
+
+    Returns:
+        One entry per name that resolved, each with `name`, `latitude` and
+        `longitude`. Names that do not resolve are simply absent - the chips
+        still work without a pin.
+    """
+    if not names or not destination:
+        return []
+
+    # Without the POI geocoder there is nothing to place these with, so return
+    # before making any network call at all. This is also what keeps the test
+    # suite offline: no key configured means no request, and the advisory turn
+    # still answers - it just answers without pins.
+    if not (settings or get_settings()).geoapify_api_key.get_secret_value():
+        return []
+
+    centre = await geocode_centre(destination, settings=settings)
+
+    located = await asyncio.gather(
+        *(geocode_landmark(name, near=destination, centre=centre) for name in names),
+        return_exceptions=True,
+    )
+
+    return [
+        {"name": name, "latitude": found[0], "longitude": found[1]}
+        for name, found in zip(names, located, strict=True)
+        if isinstance(found, tuple)
+    ]
 
 
 #: Capped well below the 12 sent to the prompt (`_light_retrieval`'s internal

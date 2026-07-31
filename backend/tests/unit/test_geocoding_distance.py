@@ -14,7 +14,12 @@ from typing import Any
 import pytest
 
 from app.services import geocoding
-from app.services.geocoding import MAX_PIN_DISTANCE_KM, distance_km, geocode_landmark
+from app.services.geocoding import (
+    MAX_PIN_DISTANCE_KM,
+    distance_km,
+    geocode_centre,
+    geocode_landmark,
+)
 
 JAIPUR = (26.9124, 75.7873)
 
@@ -118,3 +123,121 @@ async def _async(value: Any) -> Any:
         The value, awaited.
     """
     return value
+
+
+@pytest.mark.asyncio
+async def test_a_city_fallback_match_is_not_a_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The New York failure: asked for the Catskills, given Manhattan.
+
+    Geoapify could not find the Catskill Mountains, so it matched the only
+    part it recognised - "New York" - and returned the city centre with
+    `match_by_city_or_disrict`. The distance guard is useless here: the wrong
+    answer sits 0km from the centre, making it look like the most confident
+    pin on the map. Reading `match_type` is the only thing that catches it.
+    """
+    monkeypatch.setattr(
+        geocoding,
+        "request_json",
+        lambda *a, **k: _async(
+            {
+                "features": [
+                    {
+                        "properties": {
+                            "lat": 40.7127,
+                            "lon": -74.0060,
+                            "rank": {
+                                "confidence": 0.25,
+                                "match_type": "match_by_city_or_disrict",
+                            },
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+
+    result = await geocode_landmark(
+        "Catskill Mountains", near="New York", centre=(40.714, -74.006)
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_a_low_confidence_match_is_not_a_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Confidence 0 with a plausible coordinate is still a guess.
+
+    Measured: real landmark matches score 0.7-1.0, and the results that put
+    the Adirondacks in Manhattan scored 0.
+    """
+    monkeypatch.setattr(
+        geocoding,
+        "request_json",
+        lambda *a, **k: _async(
+            {
+                "features": [
+                    {
+                        "properties": {
+                            "lat": 40.7093,
+                            "lon": -74.0090,
+                            "rank": {"confidence": 0.0, "match_type": "full_match"},
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert await geocode_landmark("Finger Lakes", near="New York") is None
+
+
+@pytest.mark.asyncio
+async def test_a_confident_full_match_still_pins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guards must not reject the good case they were added around."""
+    monkeypatch.setattr(
+        geocoding,
+        "request_json",
+        lambda *a, **k: _async(
+            {
+                "features": [
+                    {
+                        "properties": {
+                            "lat": 26.9855,
+                            "lon": 75.8513,
+                            "rank": {"confidence": 0.95, "match_type": "full_match"},
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert await geocode_landmark("Amber Fort", near="Jaipur", centre=JAIPUR) == (
+        26.9855,
+        75.8513,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_centre_must_be_a_place_not_a_shop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A region centre has to be a region, or the whole map is wrong.
+
+    This is the Kerala bug. The centre is what every landmark is measured
+    against, so one bad lookup does not misplace a pin - it rejects all of
+    them. Open-Meteo answered "Kerala" with a Finnish village, and 7,000km
+    later every correct Indian pin had been thrown away.
+    """
+    monkeypatch.setattr(
+        geocoding,
+        "request_json",
+        lambda *a, **k: _async(
+            {
+                "features": [
+                    {"properties": {"lat": 1.0, "lon": 2.0, "result_type": "amenity"}},
+                    {"properties": {"lat": 10.3529, "lon": 76.5120, "result_type": "state"}},
+                ]
+            }
+        ),
+    )
+
+    assert await geocode_centre("Kerala") == (10.3529, 76.5120)

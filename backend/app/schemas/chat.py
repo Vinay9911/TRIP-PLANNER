@@ -145,6 +145,14 @@ class ChatResponse(BaseModel):
             "run yet, so a switched-off service is never offered."
         ),
     )
+    suggested_places: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "The advisory turn's options with coordinates - `name`, `latitude`, "
+            "`longitude`. Lets a client map and illustrate a conversation that "
+            "has not produced an itinerary yet, which is most of them."
+        ),
+    )
     suggested_options: list[str] = Field(
         default_factory=list,
         description=(

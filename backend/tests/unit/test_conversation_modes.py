@@ -418,6 +418,18 @@ async def test_advisor_grounds_its_options_in_the_retrieved_districts(monkeypatc
 
     monkeypatch.setattr(advisor, "call_model", capturing_call_model)
 
+    # The node geocodes its options so the reply can be mapped. That is a real
+    # network call, and this suite stays offline by design - see CLAUDE.md.
+    # Stubbed rather than disabled so the mapping path still executes.
+    async def fake_centre(name, **kwargs):
+        return (10.5, 76.2)
+
+    async def fake_landmark(name, **kwargs):
+        return (9.5, 76.3)
+
+    monkeypatch.setattr(advisor, "geocode_centre", fake_centre)
+    monkeypatch.setattr(advisor, "geocode_landmark", fake_landmark)
+
     state = AgentState(
         destination="Kerala",
         goal="Visit Kerala",

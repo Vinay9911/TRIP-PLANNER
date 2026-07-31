@@ -47,6 +47,30 @@ MAX_PIN_DISTANCE_KM: float = 300.0
 
 EARTH_RADIUS_KM: float = 6371.0
 
+#: Geoapify `match_type` values meaning "I could not find what you asked for,
+#: so here is the city you mentioned alongside it".
+#:
+#: These are the dangerous results. A distance check cannot catch them,
+#: because the fallback is by definition inside the very city being searched -
+#: "Catskill Mountains, New York" comes back as Manhattan, 0km from the
+#: centre, looking like the most confident pin on the map.
+_QUALIFIER_ONLY_MATCHES = frozenset(
+    {"match_by_city_or_disrict", "match_by_country_or_state", "match_by_postcode"}
+)
+
+#: Below this, Geoapify is guessing. Measured: a real landmark match scores
+#: 0.7-1.0, while the city-fallback results that produced wrong pins scored
+#: 0.25 and 0. Set at 0.5 to sit clearly between the two rather than tuned to
+#: the edge of either.
+MIN_MATCH_CONFIDENCE: float = 0.5
+
+#: Geoapify result types acceptable as a *destination centre*.
+#:
+#: A centre may legitimately be a country, a state or a city - "Kerala" is a
+#: state and "Jaipur" is a city - but it must not be a shop or a street, which
+#: is what an unfiltered search returns for an unrecognised region name.
+_CENTRE_RESULT_TYPES = frozenset({"country", "state", "county", "city", "postcode", "suburb"})
+
 
 def distance_km(first: tuple[float, float], second: tuple[float, float]) -> float:
     """Great-circle distance between two (latitude, longitude) points.
@@ -127,6 +151,67 @@ async def geocode_place(place: str, *, settings: Settings | None = None) -> dict
     }
 
 
+async def geocode_centre(
+    place: str, *, settings: Settings | None = None
+) -> tuple[float, float] | None:
+    """Resolve a destination to the point a map should be centred on.
+
+    Separate from `geocode_place` because they fail differently. Open-Meteo is
+    a gazetteer of *populated places*, so an administrative region is often
+    absent from it or present with no population - and "most populous wins"
+    cannot break a tie between two candidates that both report nothing.
+    Measured: `geocode_place("Kerala")` returns **Kerälä, Finland**, a village
+    of unstated size, in preference to the Indian state of 33 million people,
+    which Open-Meteo does not rank as a settlement at all.
+
+    That mattered more than a wrong dot on a map. The centre is what every
+    landmark lookup is then measured against, so a centre in Finland rejected
+    all four correct Kerala pins for being 7,000km away - one bad lookup
+    silently emptied the entire map.
+
+    Geoapify returns Kerala as `type=state` with confidence 1, so it is asked
+    instead, and its answer is only accepted if it really is a place of the
+    right *kind*. `geocode_place` is deliberately left alone: weather and the
+    flight provider give it city names, which is the job it does well.
+
+    Args:
+        place: A destination - city, region or country.
+        settings: Settings override, for tests.
+
+    Returns:
+        A (latitude, longitude) pair, or None when nothing suitable matched.
+        None must mean "do not filter by distance" upstream, not "show nothing".
+    """
+    cfg = settings or get_settings()
+    key = cfg.geoapify_api_key.get_secret_value()
+    if not key:
+        return None
+
+    try:
+        payload = await request_json(
+            "GET",
+            "https://api.geoapify.com/v1/geocode/search",
+            service="geoapify-geocode",
+            # More than one, because the best match for a bare region name is
+            # not always first and the type filter below does the choosing.
+            params={"text": place, "limit": "5", "apiKey": key},
+        )
+    except Exception:  # noqa: BLE001 - a missing centre disables filtering, never fails a run
+        logger.info("geocoding.centre_failed", place=place)
+        return None
+
+    for feature in payload.get("features") or []:
+        properties = feature.get("properties") or {}
+        if properties.get("result_type") not in _CENTRE_RESULT_TYPES:
+            continue
+        latitude, longitude = properties.get("lat"), properties.get("lon")
+        if latitude is None or longitude is None:
+            continue
+        return float(latitude), float(longitude)
+
+    return None
+
+
 async def geocode_landmark(
     name: str,
     *,
@@ -201,6 +286,26 @@ async def geocode_landmark(
     properties = features[0].get("properties") or {}
     latitude, longitude = properties.get("lat"), properties.get("lon")
     if latitude is None or longitude is None:
+        return None
+
+    # Geoapify says *what* it matched, and that is the difference between a
+    # pin and a lie. Asked for "Catskill Mountains, New York" it cannot find
+    # the Catskills, so it falls back to the part it does recognise - the
+    # city - and returns Manhattan with match_type=match_by_city_or_disrict
+    # and confidence 0.25. The coordinate is real, the answer is wrong, and a
+    # distance check cannot catch it because the wrong answer is by
+    # construction *next to* the place we biased towards.
+    #
+    # So a match that only resolved the qualifier is no match at all.
+    rank = properties.get("rank") or {}
+    match_type = rank.get("match_type")
+    if match_type in _QUALIFIER_ONLY_MATCHES:
+        logger.info("geocoding.landmark_unmatched", name=name, match_type=match_type)
+        return None
+
+    confidence = rank.get("confidence")
+    if confidence is not None and float(confidence) < MIN_MATCH_CONFIDENCE:
+        logger.info("geocoding.landmark_low_confidence", name=name, confidence=confidence)
         return None
 
     found = (float(latitude), float(longitude))

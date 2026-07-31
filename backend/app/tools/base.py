@@ -59,6 +59,7 @@ from pydantic import BaseModel, Field
 
 from app.core.errors import ExternalServiceError, RateLimitError, ToolExecutionError
 from app.core.logging import get_logger
+from app.services.progress import emit, label_for_tool
 
 logger = get_logger(__name__)
 
@@ -262,6 +263,20 @@ def _record(record: ToolCallRecord) -> None:
     records = _recorder.get()
     if records is not None:
         records.append(record)
+
+    # Announced on completion rather than on start because that is where the
+    # record already exists - and a tool that finished in 200ms would
+    # otherwise flash a "looking up..." line the eye cannot read anyway. The
+    # slow ones are the ones worth narrating, and they narrate themselves by
+    # being the last line on screen for several seconds.
+    emit(
+        "tool",
+        label_for_tool(record.tool_name),
+        detail=None if record.status == "ok" else f"{record.source} unavailable",
+        tool=record.tool_name,
+        status=record.status,
+        latency_ms=record.latency_ms,
+    )
 
 
 def _summarise(result: ToolResult, limit: int = 400) -> str:

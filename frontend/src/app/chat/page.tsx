@@ -31,6 +31,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
 import { ItineraryView } from "@/components/Itinerary";
+import { PlaceMap, type MappedItem } from "@/components/PlaceMap";
 import { AuthGate } from "@/components/AuthGate";
 import {
   IconBed,
@@ -63,6 +64,7 @@ import {
   api,
   type ChatResponse,
   type FocusService,
+  type ProgressEvent,
   type TripState,
 } from "@/lib/api";
 
@@ -178,6 +180,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
   // local model by itself once the daily quota is gone. This switch is for
   // choosing local deliberately - offline, or to stop spending quota.
   const [localOnly, setLocalOnly] = useState(false);
+  const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [trip, setTrip] = useState<TripState>({});
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -247,9 +250,26 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
       setInput("");
       setTurns((previous) => [...previous, { role: "user", content: trimmed }]);
       setBusy(true);
+      setProgress([]);
 
       try {
-        const reply = await api.chat(trimmed, sessionId, focus, localOnly);
+        const reply = await api.chatStream(trimmed, {
+          sessionId,
+          focus,
+          localOnly,
+          onProgress: (event) =>
+            setProgress((previous) => {
+              // A stage replaces the headline; tools accumulate beneath it.
+              // Keeping every stage would scroll the interesting part - the
+              // thing happening *now* - off the top of a small panel.
+              const next =
+                event.kind === "stage"
+                  ? previous.filter((e) => e.kind !== "stage")
+                  : previous;
+              return [...next, event].slice(-6);
+            }),
+        });
+        setProgress([]);
         setSessionId(reply.session_id);
         setTrip(reply.trip_state ?? {});
         setTurns((previous) => [
@@ -263,6 +283,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
           router.replace(`/chat?session=${reply.session_id}`, { scroll: false });
         }
       } catch (caught) {
+        setProgress([]);
         const text =
           caught instanceof ApiError
             ? caught.message
@@ -299,7 +320,7 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
           <Message key={index} turn={turn} onPickOption={(t) => void send(t)} />
         ))}
 
-        {busy && <Thinking />}
+        {busy && <Thinking progress={progress} />}
         {error && (
           <ErrorBanner
             message={error}
@@ -539,7 +560,15 @@ function Message({
         )}
 
         {meta && meta.mode === "advise" && meta.suggested_options.length > 0 && (
-          <OptionChips options={meta.suggested_options} onPick={onPickOption} />
+          <OptionGallery
+            options={meta.suggested_options}
+            places={(meta.suggested_places ?? []) as {
+              name: string;
+              latitude: number;
+              longitude: number;
+            }[]}
+            onPick={onPickOption}
+          />
         )}
 
         {meta && meta.suggested_actions.length > 0 && (
@@ -809,29 +838,113 @@ function ActionChips({
  * one sends it as the next message, so picking a suggestion is a tap instead
  * of retyping a name out of a paragraph.
  */
-function OptionChips({
+/**
+ * The places an advisory turn is offering, as pictures and pins.
+ *
+ * **Why this is not a row of chips.** Photographs and a map were wired only
+ * to the finished itinerary, which is the rarest thing this agent produces -
+ * most conversations are two or three advisory turns that never reach a full
+ * plan. So both features existed and almost nobody saw them, and the most
+ * frequent complaint about the app was that it had neither. It had both,
+ * behind the wrong door.
+ *
+ * A name alone also asks too much. "The Adirondacks, the Catskills, the Hudson
+ * Valley" only helps someone who already knows where those are relative to
+ * one another - which is precisely what a traveller choosing between them does
+ * not know yet. Three pins and three photographs answer it without a sentence.
+ *
+ * The whole card is the button. Picking one of several offered options is the
+ * single most likely next action in this gear, so it gets the largest possible
+ * target rather than a chip-sized one.
+ */
+function OptionGallery({
   options,
+  places,
   onPick,
 }: {
   options: string[];
+  places: { name: string; latitude: number; longitude: number }[];
   onPick: (text: string) => void;
 }) {
+  const [showMap, setShowMap] = useState(true);
+  const byName = new Map(places.map((place) => [place.name, place]));
+
+  // Only pinned options are numbered - a number beside a card with no pin
+  // would point at nothing on the map.
+  const pinned = options.filter((option) => byName.has(option));
+  const numberOf = new Map(pinned.map((name, index) => [name, index + 1]));
+
+  const mapped: MappedItem[] = pinned.map((name, index) => ({
+    name,
+    kind: "neighbourhood",
+    district: null,
+    description: "",
+    latitude: byName.get(name)!.latitude,
+    longitude: byName.get(name)!.longitude,
+    approx_duration: null,
+    booking_note: null,
+    index: index + 1,
+    dayNumber: 1,
+  }));
+
   return (
-    <div className="mt-2.5 flex flex-wrap gap-2">
-      {options.map((option) => (
-        <button
-          key={option}
-          type="button"
-          onClick={() => onPick(`Let's do ${option}`)}
-          className="group inline-flex min-h-11 items-center gap-2 overflow-hidden rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] py-1 pl-1 pr-3.5 text-xs font-medium transition-[border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)]"
-        >
-          <PlaceImage name={option} width={64} height={64} className="h-8 w-8 rounded-full" />
-          {option}
-        </button>
-      ))}
+    <div className="mt-3 space-y-2.5">
+      {mapped.length > 1 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowMap((value) => !value)}
+            aria-expanded={showMap}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[var(--color-brand)]/40 bg-[var(--color-brand-soft)] px-3 text-xs font-medium text-[var(--color-brand-strong)] transition-colors duration-200 hover:border-[var(--color-brand)]"
+          >
+            <IconPin size="0.95em" />
+            {showMap ? "Hide map" : `Show these on a map (${mapped.length})`}
+          </button>
+
+          <div
+            className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+              showMap ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+            }`}
+          >
+            <div className="overflow-hidden">
+              {showMap && <PlaceMap items={mapped} className="h-56 sm:h-64" />}
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onPick(`Let's do ${option}`)}
+            className="group overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] text-left transition-[border-color,transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-brand)] hover:shadow-[0_12px_28px_-20px_rgb(44_31_43_/_0.55)]"
+          >
+            <div className="relative h-24 w-full overflow-hidden">
+              <PlaceImage
+                name={option}
+                width={320}
+                height={200}
+                className="h-24 w-full object-cover transition-transform duration-500 group-hover:scale-105"
+              />
+              {numberOf.has(option) && (
+                <span className="absolute left-2 top-2 grid size-5 place-items-center rounded-full bg-[var(--color-brand-strong)] text-[10px] font-semibold text-white">
+                  {numberOf.get(option)}
+                </span>
+              )}
+            </div>
+            <span className="flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium">
+              {option}
+              <IconChevron size="0.9em" className="-rotate-90 opacity-40" />
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
+
 
 function Trace({ meta }: { meta: ChatResponse }) {
   return (
@@ -997,42 +1110,80 @@ function TripDetailsPicker({ onInsert }: { onInsert: (text: string) => void }) {
   );
 }
 
-function Thinking() {
-  const [stage, setStage] = useState(0);
-  const stages = [
-    { icon: <IconCompass size="1em" />, text: "Reading your request" },
-    { icon: <IconSparkle size="1em" />, text: "Researching the destination" },
-    { icon: <IconSun size="1em" />, text: "Checking details" },
-    { icon: <IconCalendar size="1em" />, text: "Writing it up" },
-  ];
+/**
+ * What the agent is doing, right now.
+ *
+ * This replaced a timer that advanced through four invented stages every
+ * seven seconds. That was honest about being an approximation, but it was
+ * still guessing - and it guessed badly on the runs that most needed
+ * explaining, sitting on "Writing it up" for three minutes while the executor
+ * was actually stuck re-searching hotels.
+ *
+ * The events are real now, streamed from the graph as each node completes and
+ * each tool returns. The headline is the current stage; finished tool calls
+ * accumulate underneath, most recent last, capped so the panel cannot grow
+ * without bound on a long plan.
+ *
+ * The elapsed counter matters more than it looks. A plan legitimately takes
+ * a minute or two, and a number that keeps moving is the difference between
+ * "this is working" and "this has frozen" - which is what people actually
+ * reported before any of this existed.
+ */
+function Thinking({ progress }: { progress: ProgressEvent[] }) {
+  const [elapsed, setElapsed] = useState(0);
 
-  // Advances on a timer rather than from real progress events: the backend
-  // does not stream stage updates, so this is an honest approximation of a
-  // sequence that genuinely happens in that order, not a fake progress bar
-  // claiming to know how far along the run is.
   useEffect(() => {
-    const id = setInterval(() => setStage((s) => Math.min(s + 1, stages.length - 1)), 7000);
+    const id = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => clearInterval(id);
-  }, [stages.length]);
+  }, []);
+
+  const stage = progress.find((event) => event.kind === "stage");
+  const tools = progress.filter((event) => event.kind === "tool");
 
   return (
-    <div className="rise-in flex items-center gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3">
-      <span className="flex gap-1" aria-hidden>
-        {[0, 1, 2].map((index) => (
-          <span
-            key={index}
-            className="typing-dot h-1.5 w-1.5 rounded-full bg-[var(--color-brand)]"
-            style={{ animationDelay: `${index * 0.16}s` }}
-          />
-        ))}
-      </span>
-      <span className="flex items-center gap-1.5 text-sm text-[var(--color-ink-soft)]">
-        <span className="text-[var(--color-brand)]">{stages[stage].icon}</span>
-        {stages[stage].text}…
-      </span>
-      <span className="ml-auto text-[11px] text-[var(--color-ink-faint)]">
-        quick answers take seconds, full plans up to a minute
-      </span>
+    <div className="rise-in space-y-2 rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3">
+      <div className="flex items-center gap-3">
+        <span className="flex gap-1" aria-hidden>
+          {[0, 1, 2].map((index) => (
+            <span
+              key={index}
+              className="typing-dot h-1.5 w-1.5 rounded-full bg-[var(--color-brand)]"
+              style={{ animationDelay: `${index * 0.16}s` }}
+            />
+          ))}
+        </span>
+        <span
+          className="text-sm text-[var(--color-ink-soft)]"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {stage?.message ?? "Getting started"}
+          {stage?.detail && (
+            <span className="text-[var(--color-ink-faint)]"> · {stage.detail}</span>
+          )}
+          …
+        </span>
+        <span className="ml-auto tabular-nums text-[11px] text-[var(--color-ink-faint)]">
+          {elapsed}s
+        </span>
+      </div>
+
+      {tools.length > 0 && (
+        <ul className="space-y-0.5 border-t border-[var(--color-line)] pt-2">
+          {tools.map((tool, index) => (
+            <li
+              key={`${tool.message}-${index}`}
+              className="rise-in flex items-center gap-1.5 text-[11px] text-[var(--color-ink-faint)]"
+            >
+              <span className="text-[var(--color-mint)]" aria-hidden>
+                ✓
+              </span>
+              {tool.message}
+              {tool.detail && <span className="text-[var(--color-warn)]">· {tool.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
