@@ -51,6 +51,26 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     rate_limit_requests_per_minute: int = Field(default=10, ge=1)
 
+    # Open the admin trace dashboard to any authenticated caller.
+    #
+    # **Off by default, and it must stay that way anywhere real.** `/admin`
+    # reads across every user - their conversations, their stored memories and
+    # their full execution traces - so switching this on means any visitor can
+    # read any other visitor's trips. That is a genuine trade, not a hidden
+    # one.
+    #
+    # It exists because this deployment is a reviewed take-home. The trace
+    # dashboard is the evidence for most of what the documentation claims -
+    # that tool selection is dynamic, that retrieval really chains, that
+    # memories were injected into a specific answer - and requiring a reviewer
+    # to obtain credentials before they can check any of it defeats the point
+    # of showing the work.
+    #
+    # Implemented as one flag read in one place (`api/deps.require_admin`)
+    # rather than by loosening the check itself, so the authorization logic
+    # stays intact and turning this off restores normal behaviour completely.
+    public_admin_dashboard: bool = False
+
     # -- LLM (Groq) -------------------------------------------------------
     # Accepts ONE key or several comma-separated. Multiple keys are pooled
     # and rotated, so a rate limit on one moves straight to the next rather

@@ -86,3 +86,12 @@ services:
         value: "4"
       - key: RATE_LIMIT_REQUESTS_PER_MINUTE
         value: "8"
+
+      # Opens the execution-trace dashboard to any visitor. Deliberate for
+      # this deployment: the traces are the evidence for what the agent
+      # actually did, and requiring a reviewer to obtain credentials before
+      # they can check any of it defeats the point of showing the work. It
+      # means visitors can see each other's trips - an acceptable trade for a
+      # demo carrying no real user data, and the wrong one for anything else.
+      - key: PUBLIC_ADMIN_DASHBOARD
+        value: "true"

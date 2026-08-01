@@ -57,9 +57,10 @@ memory and multi-hop retrieval.
 * **Plans before acting.** A planner decomposes the request into steps, an
   executor carries each one out with tools, and a replanner revises the plan
   when something fails or turns out to be unnecessary.
-* **Chooses its own tools.** Seven tools covering travel guides, mapped
-  places, weather, live web search, flights and accommodation. There is no
-  keyword routing anywhere - the model decides, every time.
+* **Chooses its own tools.** Eight tools covering travel guides, mapped
+  places, weather, live web search, flights, accommodation and long-term
+  memory. There is no keyword routing anywhere - the model decides, every
+  time.
 * **Remembers you.** Durable preferences are extracted from conversations,
   deduplicated against what is already known, and applied to future trips to
   any city without you repeating yourself.
@@ -100,6 +101,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         environment=settings.environment,
         flight_provider=settings.flight_provider,
     )
+
+    if settings.public_admin_dashboard:
+        # Logged loudly at startup, every boot. A setting that widens who can
+        # read other people's data should never be something an operator has
+        # to go looking for.
+        logger.warning(
+            "app.admin_dashboard_is_public",
+            detail=(
+                "PUBLIC_ADMIN_DASHBOARD is on: any authenticated caller can read "
+                "every user's conversations, memories and traces. Intended for a "
+                "reviewed demo deployment only."
+            ),
+        )
 
     if settings.is_production:
         missing = settings.missing_production_secrets()
