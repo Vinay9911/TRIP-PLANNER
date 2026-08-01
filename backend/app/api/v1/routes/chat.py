@@ -371,13 +371,23 @@ async def get_session(session_id: str, user: CurrentUser, sessions: Sessions) ->
 @router.delete(
     "/sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Archive a conversation",
+    summary="Delete a conversation and everything derived from it",
 )
 async def delete_session(session_id: str, user: CurrentUser, sessions: Sessions) -> None:
-    """Archive a conversation so it no longer appears in listings.
+    """Erase a conversation, its messages, its traces and what it taught the agent.
 
-    A soft delete. Permanently erasing derived data is a separate, explicit
-    operation - see `DELETE /api/v1/me/data`.
+    A real delete, not an archive. The previous behaviour only set
+    `archived_at`, which hid the conversation while leaving its messages, its
+    execution traces and - least expectedly - any preferences the agent had
+    *learned* from it still in force. A traveller who deletes a trip and then
+    finds it still shaping later suggestions has been misled by the bin icon.
+
+    Short-term memory goes too: the checkpointer keys conversation state by
+    session id in its own tables, and nothing in the schema cascades there.
+
+    The retrieved travel-guide cache is deliberately kept. Those are Wikivoyage
+    articles shared by every user, not anybody's personal data, and discarding
+    them would only make the next request slower.
     """
-    if not await sessions.archive(session_id, user.id):
+    if not (await sessions.purge(session_id, user.id))["sessions"]:
         raise ResourceNotFoundError(f"Session {session_id} was not found.")

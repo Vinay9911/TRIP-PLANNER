@@ -257,13 +257,25 @@ export function AppShell({
                             <button
                               onClick={async (e) => {
                                 e.preventDefault();
-                                if (window.confirm("Delete this trip?")) {
+                                // Says what it actually does. This used to
+                                // archive, and the wording matched neither the
+                                // bin icon nor the new behaviour - which now
+                                // includes discarding anything the agent
+                                // learned during the conversation.
+                                if (
+                                  window.confirm(
+                                    "Delete this trip permanently?\n\n" +
+                                      "Its messages, map, execution trace and anything " +
+                                      "the agent learned about you during it are all erased. " +
+                                      "This cannot be undone.",
+                                  )
+                                ) {
                                   try {
                                     await api.deleteSession(item.id);
                                     if (active) router.push("/chat");
                                     await loadHistory();
-                                  } catch (err) {
-                                    window.alert("Could not delete trip.");
+                                  } catch {
+                                    window.alert("Could not delete this trip.");
                                   }
                                 }
                               }}

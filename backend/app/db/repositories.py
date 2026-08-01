@@ -172,6 +172,82 @@ class SessionRepository:
             )
             return cursor.rowcount > 0
 
+    async def purge(self, session_id: str, user_id: str) -> dict[str, int]:
+        """Erase a conversation and everything derived from it.
+
+        "Delete this trip" should mean the trip is gone, not hidden. Archiving
+        left the messages, the execution traces and - most surprisingly -
+        anything the agent had *learned* from that conversation still in place,
+        so a preference picked up during a deleted trip would carry on shaping
+        future answers with no visible source. That is the wrong behaviour to
+        offer behind a bin icon.
+
+        Four things go, and only the first is handled by the schema:
+
+        1. **The session row**, which cascades into messages, agent runs, steps
+           and tool calls through foreign keys declared in migrations 0002
+           and 0004.
+        2. **Memories extracted from it.** Their foreign key is `on delete set
+           null`, which is right for a memory that has been *reinforced* by
+           later conversations but wrong here - so they are deleted explicitly,
+           first, while the link still exists to find them by.
+        3. **Short-term memory.** The LangGraph checkpointer keys conversation
+           state by `thread_id`, which is the session id, in its own tables
+           outside this schema. Nothing cascades to them.
+        4. Not the RAG cache: those are Wikivoyage articles, shared across
+           every user and every trip, and deleting one traveller's Delhi
+           lookup would only make the next person's slower.
+
+        Args:
+            session_id: Conversation to erase.
+            user_id: Owner, for RLS scoping.
+
+        Returns:
+            How many rows were removed, per category, so the caller can report
+            what actually happened rather than assuming.
+        """
+        removed = {"memories": 0, "checkpoints": 0, "sessions": 0}
+
+        async with self.db.user_scope(user_id) as conn:
+            # Memories first: the FK nulls the link on delete, so afterwards
+            # there would be no way to tell which memories came from here.
+            cursor = await conn.execute(
+                "delete from public.memories where source_session_id = %s::uuid",
+                (session_id,),
+            )
+            removed["memories"] = cursor.rowcount
+
+            cursor = await conn.execute(
+                "delete from public.sessions where id = %s::uuid",
+                (session_id,),
+            )
+            removed["sessions"] = cursor.rowcount
+
+        # The checkpointer's tables are created and owned by LangGraph, sit
+        # outside the RLS policies written for this application, and key on a
+        # bare text thread id. So they are cleared in a separate service-scoped
+        # transaction - and only after the session delete above succeeded,
+        # which is what proves the caller owned it.
+        if removed["sessions"]:
+            async with self.db.service_scope(reason="purge_session_checkpoints") as conn:
+                for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+                    try:
+                        # Table names come from a fixed tuple, never user input.
+                        cursor = await conn.execute(
+                            f"delete from public.{table} where thread_id = %s",  # noqa: S608
+                            (session_id,),
+                        )
+                        removed["checkpoints"] += cursor.rowcount
+                    except Exception:  # noqa: BLE001
+                        # A deployment running without the Postgres checkpointer
+                        # has no such tables. The conversation is already gone;
+                        # failing here would report an error for work that was
+                        # never needed.
+                        logger.debug("sessions.checkpoint_purge_skipped", table=table)
+
+        logger.info("sessions.purged", session_id=session_id, **removed)
+        return removed
+
     async def add_message(
         self,
         session_id: str,
