@@ -123,7 +123,16 @@ async def system_status(user: CurrentUser, settings: AppSettings) -> dict[str, A
     if pool is None:
         quota = {"configured": False, "keys": [], "total": None}
     else:
-        status = pool.status(include_quota=True)
+        # The models this deployment actually uses, so an untouched key reports
+        # its real allowance instead of an empty breakdown summing to zero.
+        configured = sorted(
+            {
+                settings.llm_planner_model,
+                settings.llm_executor_model,
+                settings.llm_utility_model,
+            }
+        )
+        status = pool.status(include_quota=True, models=configured)
         keys = status["keys"]
 
         # Summed across keys, because that is the number the operator actually

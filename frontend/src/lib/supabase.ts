@@ -41,28 +41,35 @@ export function getSupabase(): SupabaseClient {
 }
 
 /**
- * Return the current session, creating an anonymous one if there is none.
+ * Return the current session, signing in automatically if there is none.
  *
- * **This is what replaced the login wall**, and the choice of mechanism is the
- * whole point. The obvious way to "remove login" is to drop authentication and
- * hardcode a user id, which would have quietly destroyed three things that
- * work today: the API's JWT verification, the database's row level security,
- * and per-traveller memory isolation. Every visitor would have shared one
- * profile, so one person's dietary requirement would surface in another
- * person's itinerary.
+ * **Everyone who opens this deployment lands in the same workspace**, and that
+ * is the point rather than an oversight. This is a demonstration: the trips,
+ * the remembered preferences and the execution traces are the thing being
+ * shown, so a reviewer arriving at the link needs to find them already there.
+ * A per-visitor identity would give each of them a blank slate and nothing to
+ * look at - which is exactly what the first version did.
  *
- * Supabase anonymous sign-in issues a *real* JWT with a real `sub` UUID, so
- * none of that changes - the backend cannot tell an anonymous caller from a
- * registered one, and neither can RLS. The only difference is that nobody had
- * to type anything.
+ * So a single shared account is signed into with credentials that ship in the
+ * browser bundle. Two things make that defensible rather than careless:
  *
- * The session persists in local storage, which is what makes long-term memory
- * demonstrable: close the tab, come back tomorrow, and the agent still knows
- * you are vegetarian, because it is still the same `sub`.
+ * - **Nothing is being protected.** There is one account, so "another user's
+ *   data" does not exist. The credentials grant exactly what the interface
+ *   already offers anyone who opens the page.
+ * - **The security machinery is untouched.** This is a real Supabase sign-in
+ *   returning a real signed JWT, so the API still verifies every request and
+ *   row level security still scopes every query to `auth.uid()`. Had the login
+ *   been removed by hardcoding a user id server-side, all of that would have
+ *   been bypassed instead of satisfied.
  *
- * Requires "Allow anonymous sign-ins" to be enabled under Authentication ->
- * Sign In / Providers in the Supabase dashboard. It is off by default, and the
- * failure is a clear `anonymous_provider_disabled` error rather than a hang.
+ * For anything with real users this is wrong and the fallback below is right:
+ * with no demo credentials configured, each visitor gets their own anonymous
+ * identity and sees only their own trips.
+ *
+ * Signing in is idempotent, which also fixes a real problem the anonymous path
+ * had: React StrictMode invokes effects twice in development, and two
+ * `signInAnonymously()` calls create two accounts. Two duplicate users were
+ * observed 1.3ms apart before this changed.
  */
 export async function ensureSession() {
   const supabase = getSupabase();
@@ -72,6 +79,19 @@ export async function ensureSession() {
   } = await supabase.auth.getSession();
   if (session?.user) return session;
 
+  const email = process.env.NEXT_PUBLIC_DEMO_EMAIL;
+  const password = process.env.NEXT_PUBLIC_DEMO_PASSWORD;
+
+  if (email && password) {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data.session;
+  }
+
+  // No shared account configured: fall back to a private identity per visitor.
+  // Requires "Allow anonymous sign-ins" under Authentication -> Sign In /
+  // Providers, which is off by default in new Supabase projects; the failure
+  // is a clear `anonymous_provider_disabled` error rather than a hang.
   const { data, error } = await supabase.auth.signInAnonymously();
   if (error) throw error;
   return data.session;

@@ -434,12 +434,20 @@ class KeyPool:
             limit=limit,
         )
 
-    def status(self, *, include_quota: bool = False) -> dict[str, object]:
+    def status(
+        self, *, include_quota: bool = False, models: list[str] | None = None
+    ) -> dict[str, object]:
         """Pool health, for `/health/ready` and the admin dashboard.
 
         Args:
             include_quota: Also report the per-key daily token estimate. Off by
                 default so the readiness probe stays a cheap liveness answer.
+            models: Models to report on even when nothing has been spent on
+                them yet. Without this, a freshly-started server tracks no
+                models, sums a limit of zero, and reports "0 of 0 tokens
+                remaining" - which reads as *exhausted* when it means
+                *untouched*, and is the most alarming way possible to say
+                nothing has happened yet.
 
         Returns:
             Counts and per-key statistics. Keys are masked - never returned in
@@ -458,7 +466,7 @@ class KeyPool:
                     "errors": state.total_errors,
                 }
                 if include_quota:
-                    entry["quota"] = self._quota_for(state, now)
+                    entry["quota"] = self._quota_for(state, now, models or [])
                 keys.append(entry)
 
             return {
@@ -469,7 +477,9 @@ class KeyPool:
             }
 
     @staticmethod
-    def _quota_for(state: _KeyState, now: float) -> dict[str, object]:
+    def _quota_for(
+        state: _KeyState, now: float, always_include: list[str]
+    ) -> dict[str, object]:
         """Render one key's daily budget position. Caller must hold the lock.
 
         Reported per model as well as in total, because "this key has budget"
@@ -477,8 +487,12 @@ class KeyPool:
         finished for the executor's model and perfectly usable for the
         planner's. A single aggregate number would hide exactly the situation
         the fallback chain in `models_for_role` exists to handle.
+
+        `always_include` names the models this deployment is configured to use,
+        so an untouched key reports its full allowance rather than an empty
+        list summing to zero.
         """
-        models = sorted(set(state.spend) | set(state.reported))
+        models = sorted(set(state.spend) | set(state.reported) | set(always_include))
         per_model = []
         used_total = 0
         limit_total = 0

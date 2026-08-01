@@ -122,6 +122,23 @@ def test_quota_is_omitted_unless_asked_for() -> None:
     assert "quota" not in pool.status()["keys"][0]  # type: ignore[index]
 
 
+def test_an_untouched_key_reports_its_full_allowance() -> None:
+    """A fresh server must not read as exhausted.
+
+    With nothing spent there is nothing tracked, so the breakdown was empty and
+    the totals summed to zero - rendering as "0 of 0 tokens remaining", which
+    says *exhausted* when it means *untouched*. Naming the configured models
+    is what gives an idle key something to report.
+    """
+    pool = _pool()
+    quota = pool.status(include_quota=True, models=[MODEL])["keys"][0]["quota"]  # type: ignore[index]
+
+    assert quota["limit"] == DAILY_TOKEN_LIMITS[MODEL]
+    assert quota["remaining"] == DAILY_TOKEN_LIMITS[MODEL]
+    assert quota["used"] == 0
+    assert quota["models"][0]["measured"] is False
+
+
 def test_zero_token_calls_are_ignored() -> None:
     """A provider that reported no usage must not create an empty model row."""
     pool = _pool()

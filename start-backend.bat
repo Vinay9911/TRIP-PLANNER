@@ -8,6 +8,28 @@ REM ===========================================================================
 
 cd /d "%~dp0backend"
 
+REM Checked before anything else. uvicorn's auto-reloader runs the app in a
+REM child process, and closing this window instead of pressing Ctrl+C orphans
+REM that child - it keeps port 8000 with no visible window attached to it. The
+REM next run then fails to bind, or worse, appears to start while every request
+REM is actually served by yesterday's code.
+netstat -ano | findstr /r /c:"TCP.*:8000 .*LISTENING" >nul 2>&1
+if not errorlevel 1 (
+    echo.
+    echo   Port 8000 is already in use, most likely by an API server left
+    echo   running from a previous session.
+    echo.
+    set /p KILLIT="  Stop it and continue? [Y/n] "
+    if /i "%KILLIT%"=="n" goto :skipkill
+    for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:"TCP.*:8000 .*LISTENING"') do (
+        echo   Stopping process %%p...
+        taskkill /f /pid %%p >nul 2>&1
+    )
+    timeout /t 2 /nobreak >nul
+    echo   Done.
+    :skipkill
+)
+
 if not exist ".venv\Scripts\python.exe" (
     echo Creating virtual environment ^(first run only, takes a few minutes^)...
     python -m venv .venv
@@ -33,7 +55,7 @@ if not exist "..\.env" (
 echo.
 echo Starting the API on http://localhost:8000
 echo Interactive docs: http://localhost:8000/docs
-echo Press Ctrl+C to stop.
+echo Press Ctrl+C to stop ^(closing the window leaves the process running^).
 echo.
 
 REM run.py rather than uvicorn: uvicorn picks an event loop on Windows that
