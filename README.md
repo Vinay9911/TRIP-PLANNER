@@ -540,6 +540,11 @@ python scripts/apply_migrations.py
 # End-to-end functional test against a running API
 python scripts/smoke_test.py --email you@example.com --password '...'
 
+# Check every API key by actually using it. `/health/ready` reports whether a
+# key is configured and rested, NOT whether it works - a revoked key looks
+# identical to a healthy one there until a real request fails.
+python scripts/probe_keys.py
+
 # Erase every conversation, memory and trace, leaving the schema intact.
 # Counts first and changes nothing unless --apply is passed.
 python scripts/reset_data.py

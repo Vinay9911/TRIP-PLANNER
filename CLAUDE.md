@@ -311,7 +311,7 @@ Destination photos are seeded placeholders, labelled as illustrative.
 - `docs/TESTING.md` — runbook: how to start everything and verify each claim
 - `docs/AUDIT.md` — 30 Jul 2026 diagnostic pass: what was broken and why
 - `docs/TECHNICAL_DOCUMENT.md` — the single self-contained submission document
-- `scripts/` — verify_setup.py, apply_migrations.py, smoke_test.py, reset_data.py
+- `scripts/` — verify_setup.py, apply_migrations.py, smoke_test.py, reset_data.py, probe_keys.py
 - Module docstrings carry the detailed reasoning; keep them current.
 
 ## Status
