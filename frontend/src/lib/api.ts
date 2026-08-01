@@ -261,6 +261,64 @@ export interface RunTrace {
   }[];
 }
 
+/**
+ * One key's position against its daily allowance.
+ *
+ * `measured` is the field that matters. Groq publishes no daily quota, so
+ * every figure here is this server's own arithmetic until Groq refuses a call
+ * and quotes real numbers - at which point that model flips to measured.
+ * Rendering an estimate and a measurement identically would be the same class
+ * of dishonesty as the simulated-price badge elsewhere in this interface.
+ */
+export interface KeyQuotaModel {
+  model: string;
+  used: number;
+  limit: number;
+  remaining: number;
+  measured: boolean;
+}
+
+export interface KeyQuota {
+  key: string;
+  available: boolean;
+  cooldown_remaining_s: number;
+  uses: number;
+  rate_limits: number;
+  errors: number;
+  quota: {
+    used: number;
+    limit: number;
+    remaining: number;
+    models: KeyQuotaModel[];
+  };
+}
+
+/** What this deployment can actually do, and what budget is left. */
+export interface SystemStatus {
+  environment: string;
+  llm_provider_mode: "groq" | "local" | "auto";
+  local_llm: {
+    available: boolean;
+    reason: string;
+    models: string[];
+  };
+  quota:
+    | { configured: false; keys: []; total: null }
+    | {
+        configured: true;
+        provider: string;
+        total_keys: number;
+        available_keys: number;
+        keys: KeyQuota[];
+        total: { used: number; limit: number; remaining: number };
+        basis: string;
+      };
+  /** True when this deployment has opened the trace dashboard to everyone.
+   *  Read from the server rather than assumed, so the nav link and the
+   *  endpoint's real policy cannot disagree and produce an item that 403s. */
+  public_admin_dashboard: boolean;
+}
+
 /** An API failure carrying the backend's structured error envelope. */
 export class ApiError extends Error {
   constructor(
@@ -425,6 +483,16 @@ export const api = {
     }
     return result;
   },
+
+  /**
+   * What this deployment can do and how much cloud budget is left.
+   *
+   * Asked of the server rather than inferred in the browser: whether the local
+   * model is usable depends on what the *API* can reach, not on where the page
+   * is being viewed from. Running the frontend locally against the hosted API
+   * would fool any client-side guess.
+   */
+  systemStatus: () => request<SystemStatus>("/api/v1/system/status"),
 
   listSessions: () => request<SessionSummary[]>("/api/v1/sessions"),
 

@@ -79,7 +79,7 @@ export function AppShell({
    *  without a page reload. */
   historyToken = 0,
 }: {
-  session: { email: string | null; isAdmin: boolean };
+  session: { email: string | null; isAdmin: boolean; isAnonymous?: boolean };
   children: React.ReactNode;
   historyToken?: number;
 }) {
@@ -90,6 +90,25 @@ export function AppShell({
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Whether this deployment has opened the trace dashboard to everyone. Asked
+  // of the server rather than inferred from the profile role, because with the
+  // flag on nobody is an admin in the database and the link would never show.
+  const [publicAdmin, setPublicAdmin] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .systemStatus()
+      .then((status) => {
+        if (!cancelled) setPublicAdmin(status.public_admin_dashboard);
+      })
+      .catch(() => {
+        // Falls back to the profile role, which is the stricter answer.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -139,7 +158,9 @@ export function AppShell({
 
   const nav = [
     ...NAV,
-    ...(session.isAdmin ? [{ href: "/admin", label: "Admin", icon: IconShield } as const] : []),
+    ...(session.isAdmin || publicAdmin
+      ? [{ href: "/admin", label: "Admin", icon: IconShield } as const]
+      : []),
   ];
 
   const sidebar = (
@@ -267,11 +288,13 @@ export function AppShell({
           destructive ones especially, so neither is a mis-tap away from a
           nav item. */}
       <div className="border-t border-[var(--color-line)] pt-3">
-        {session.email && (
-          <p className="truncate px-3 pb-2 text-[11px] text-[var(--color-ink-faint)]">
-            {session.email}
-          </p>
-        )}
+        {/* A visitor who never signed in is told what that means, in one line.
+            Without it "Start fresh" reads as a tidy-up, when what it actually
+            does is erase everything the agent has learned about them - and on
+            an anonymous session there is no account to recover it from. */}
+        <p className="truncate px-3 pb-2 text-[11px] text-[var(--color-ink-faint)]">
+          {session.email ?? "Guest session · saved on this browser"}
+        </p>
         <button
           type="button"
           onClick={() => void startFresh()}
@@ -281,14 +304,20 @@ export function AppShell({
           <IconTrash size="1.1em" />
           {busy ? "Erasing…" : "Start fresh"}
         </button>
-        <button
-          type="button"
-          onClick={() => void signOut()}
-          className="flex min-h-11 w-full items-center gap-2.5 rounded-xl px-3 text-sm text-[var(--color-ink-soft)] transition-colors duration-200 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
-        >
-          <IconLogout size="1.1em" />
-          Sign out
-        </button>
+        {/* Offered only to someone who actually signed in. On an anonymous
+            session there is nothing to sign out *of*, and doing it would
+            silently strand every conversation and memory behind a user id the
+            browser can no longer produce. */}
+        {!session.isAnonymous && (
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="flex min-h-11 w-full items-center gap-2.5 rounded-xl px-3 text-sm text-[var(--color-ink-soft)] transition-colors duration-200 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
+          >
+            <IconLogout size="1.1em" />
+            Sign out
+          </button>
+        )}
       </div>
     </div>
   );

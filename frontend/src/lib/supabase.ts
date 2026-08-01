@@ -40,6 +40,43 @@ export function getSupabase(): SupabaseClient {
   return client;
 }
 
+/**
+ * Return the current session, creating an anonymous one if there is none.
+ *
+ * **This is what replaced the login wall**, and the choice of mechanism is the
+ * whole point. The obvious way to "remove login" is to drop authentication and
+ * hardcode a user id, which would have quietly destroyed three things that
+ * work today: the API's JWT verification, the database's row level security,
+ * and per-traveller memory isolation. Every visitor would have shared one
+ * profile, so one person's dietary requirement would surface in another
+ * person's itinerary.
+ *
+ * Supabase anonymous sign-in issues a *real* JWT with a real `sub` UUID, so
+ * none of that changes - the backend cannot tell an anonymous caller from a
+ * registered one, and neither can RLS. The only difference is that nobody had
+ * to type anything.
+ *
+ * The session persists in local storage, which is what makes long-term memory
+ * demonstrable: close the tab, come back tomorrow, and the agent still knows
+ * you are vegetarian, because it is still the same `sub`.
+ *
+ * Requires "Allow anonymous sign-ins" to be enabled under Authentication ->
+ * Sign In / Providers in the Supabase dashboard. It is off by default, and the
+ * failure is a clear `anonymous_provider_disabled` error rather than a hang.
+ */
+export async function ensureSession() {
+  const supabase = getSupabase();
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (session?.user) return session;
+
+  const { data, error } = await supabase.auth.signInAnonymously();
+  if (error) throw error;
+  return data.session;
+}
+
 /** Sign in with an email and password. */
 export async function signInWithPassword(email: string, password: string) {
   return getSupabase().auth.signInWithPassword({ email, password });
