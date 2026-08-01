@@ -1,9 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import Image from "next/image";
-import { getSupabase } from "@/lib/supabase";
 import {
   IconBed,
   IconBrain,
@@ -22,17 +19,13 @@ import {
 } from "@/components/icons";
 
 export default function LandingPage() {
-  const [signedIn, setSignedIn] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    getSupabase()
-      .auth.getSession()
-      .then(({ data }) => setSignedIn(Boolean(data.session)))
-      .catch(() => setSignedIn(false));
-  }, []);
-
-  const cta = signedIn ? "Open the planner" : "Start planning";
-  const href = signedIn ? "/chat" : "/login";
+  // Every call to action goes straight to the planner. There is no sign-in
+  // step to route around any more: `/chat` provisions an anonymous Supabase
+  // session on arrival, so the shortest path from landing here to a planned
+  // trip is one click. The old version had to check for a session first and
+  // send visitors to `/login`, which meant the most common outcome of reading
+  // this page was a password form.
+  const href = "/chat";
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-4 pb-12 sm:px-8 relative overflow-hidden bg-[#fafbfe]" style={{ backgroundImage: "radial-gradient(#e5e7eb 1px, transparent 1px)", backgroundSize: "30px 30px" }}>
@@ -63,7 +56,7 @@ export default function LandingPage() {
         </div>
 
         <Link href={href} className="bg-gradient-to-r from-[#e85d2c] to-[#f97316] text-white text-sm font-bold px-6 py-3 rounded-xl shadow-[0_8px_20px_-6px_rgba(232,93,44,0.6)] hover:shadow-[0_12px_25px_-6px_rgba(232,93,44,0.7)] hover:-translate-y-0.5 transition-all flex items-center gap-1.5">
-          {signedIn === null ? "Continue" : "Open the planner"} <IconChevron size="1.2em" />
+          Start planning <IconChevron size="1.2em" />
         </Link>
       </header>
 
@@ -95,7 +88,7 @@ export default function LandingPage() {
                 href={href}
                 className="bg-[#e85d2c] text-white text-[15px] font-bold px-8 py-4 rounded-xl shadow-[0_8px_25px_-8px_rgba(232,93,44,0.7)] hover:-translate-y-1 hover:shadow-[0_15px_35px_-8px_rgba(232,93,44,0.8)] transition-all flex items-center gap-2"
               >
-                {signedIn === null ? "Continue" : "Open the planner"} <IconChevron size="1.1em" />
+                Start planning <IconChevron size="1.1em" />
               </Link>
               
               <a href="#how" className="bg-white text-gray-700 border border-gray-200 text-[15px] font-bold px-6 py-4 rounded-xl shadow-sm hover:border-gray-300 hover:bg-gray-50 transition-all flex items-center gap-2">
@@ -411,7 +404,7 @@ export default function LandingPage() {
                 <div className="w-8 h-8 bg-[#e85d2c] text-white rounded-xl flex items-center justify-center font-bold shadow-md">1</div>
                 <div>
                   <h3 className="font-bold text-gray-900 text-lg leading-tight">Clarify</h3>
-                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">When you're vague</p>
+                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">When you&apos;re vague</p>
                 </div>
               </div>
               <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center text-orange-400"><IconChat size="1.2em"/></div>
@@ -486,7 +479,7 @@ export default function LandingPage() {
                 <div className="w-8 h-8 bg-[#e85d2c] text-white rounded-xl flex items-center justify-center font-bold shadow-md">3</div>
                 <div>
                   <h3 className="font-bold text-gray-900 text-lg leading-tight">Plan</h3>
-                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">When you're ready</p>
+                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">When you&apos;re ready</p>
                 </div>
               </div>
               <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center text-orange-400"><IconCalendar size="1.2em"/></div>
@@ -535,7 +528,7 @@ export default function LandingPage() {
                 Say it once.
               </h3>
               <p className="mt-4 text-[15px] font-medium leading-relaxed text-gray-500">
-                Mention you're vegetarian or fly from Delhi, and every future trip is planned around it. Hard requirements are passed to searches as filters, not just hints.
+                Mention you&apos;re vegetarian or fly from Delhi, and every future trip is planned around it. Hard requirements are passed to searches as filters, not just hints.
               </p>
             </div>
             
@@ -628,7 +621,7 @@ export default function LandingPage() {
               href={href}
               className="bg-white text-[#e85d2c] text-lg font-bold px-10 py-4 rounded-xl shadow-[0_10px_25px_rgba(0,0,0,0.15)] hover:shadow-[0_15px_35px_rgba(0,0,0,0.25)] hover:scale-105 transition-all flex items-center gap-2"
             >
-              {signedIn === null ? "Continue" : "Open the planner"} <IconChevron size="1.2em" />
+              Start planning <IconChevron size="1.2em" />
             </Link>
           </div>
         </div>

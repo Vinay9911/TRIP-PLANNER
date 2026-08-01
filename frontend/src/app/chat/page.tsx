@@ -68,6 +68,7 @@ import {
   type ChatResponse,
   type FocusService,
   type ProgressEvent,
+  type SystemStatus,
   type TripFact,
   type StoredMessage,
   type TripState,
@@ -234,6 +235,11 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
   // local model by itself once the daily quota is gone. This switch is for
   // choosing local deliberately - offline, or to stop spending quota.
   const [localOnly, setLocalOnly] = useState(false);
+  // What this deployment can actually do, and how much cloud budget is left.
+  // Fetched once per mount; null until it arrives, which the controls read as
+  // "not known yet" rather than "unavailable" - claiming the local model is
+  // missing before asking would be a worse lie than saying nothing.
+  const [system, setSystem] = useState<SystemStatus | null>(null);
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [trip, setTrip] = useState<TripState>({});
   // Carried forward rather than read off the newest reply. Asking about
@@ -307,6 +313,30 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns, busy]);
+
+  // Asked once on mount, and again after each reply so the quota figures move
+  // as budget is actually spent - watching the remaining tokens fall during a
+  // demo is the clearest possible demonstration of what a plan costs.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .systemStatus()
+      .then((status) => {
+        if (cancelled) return;
+        setSystem(status);
+        // A session that started with the local model selected, on a
+        // deployment that cannot reach one, is corrected rather than left to
+        // fail on send.
+        if (!status.local_llm.available) setLocalOnly(false);
+      })
+      .catch(() => {
+        // Status is a nicety. Failing to fetch it must not stop someone
+        // planning a trip, so the controls simply stay in their unknown state.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [turns.length]);
 
   function toggleService(id: FocusService) {
     setFocus((previous) => {
@@ -475,7 +505,12 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
         />
 
         <div className="flex flex-wrap items-center gap-1.5">
-          <EngineControl localOnly={localOnly} onToggle={() => setLocalOnly((on) => !on)} />
+          <EngineControl
+            localOnly={localOnly}
+            onToggle={() => setLocalOnly((on) => !on)}
+            system={system}
+          />
+          <QuotaMeter system={system} />
           <TripDetailsPicker onInsert={insertPrompt} />
         </div>
 
@@ -570,13 +605,13 @@ function Welcome({
           </div>
 
           <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight sm:text-3xl text-[var(--color-ink)]">
-            Let's plan your{" "}
+            Let&apos;s plan your{" "}
             <span className="text-[var(--color-brand)]">
               perfect trip ✦
             </span>
           </h1>
           <p className="mt-2 text-xs leading-relaxed text-[var(--color-ink-soft)] max-w-sm">
-            Tell me a place and I'll suggest, ask the right questions, then build the
+            Tell me a place and I&apos;ll suggest, ask the right questions, then build the
             plan — or jump straight to one specific thing.
           </p>
         </div>
@@ -593,8 +628,8 @@ function Welcome({
         <div className="flex flex-col">
           <strong className="font-semibold text-[var(--color-ink)]">I help with what matters most.</strong>
           <p className="leading-relaxed mt-0.5 text-[var(--color-ink-soft)]">
-            Tell me where you're going, how many days, roughly when, who's coming, and any must-haves
-            (diet, budget, pace). I'll ask about anything important that's missing.
+            Tell me where you&apos;re going, how many days, roughly when, who&apos;s coming, and any must-haves
+            (diet, budget, pace). I&apos;ll ask about anything important that&apos;s missing.
           </p>
         </div>
       </div>
@@ -816,43 +851,205 @@ function Message({
 function EngineControl({
   localOnly,
   onToggle,
+  system,
 }: {
   localOnly: boolean;
   onToggle: () => void;
+  system: SystemStatus | null;
 }) {
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Unknown until the status call returns. Treated as *available* in the
+  // meantime so the control does not flicker from enabled to disabled on
+  // every page load for someone running locally, where it genuinely works.
+  const unavailable = system !== null && !system.local_llm.available;
+
+  function handleClick() {
+    if (unavailable && !localOnly) {
+      setNotice(system?.local_llm.reason ?? "The local model is not reachable.");
+      return;
+    }
+    setNotice(null);
+    onToggle();
+  }
+
   return (
-    <div className="flex items-center gap-2">
+    <div className="relative flex items-center gap-2">
       <button
         type="button"
-        onClick={onToggle}
+        onClick={handleClick}
         aria-pressed={localOnly}
+        aria-disabled={unavailable && !localOnly}
         title={
-          localOnly
-            ? "Running on a local model on this machine. Slower, but no quota used."
-            : "Running on the fastest available cloud model. Falls back to local if the daily quota runs out."
+          unavailable
+            ? "Local AI is unavailable on this deployment - run the project on your own machine to use it."
+            : localOnly
+              ? "Running on a local model on this machine. Slower, but no quota used."
+              : "Running on the fastest available cloud model. Falls back to local if the daily quota runs out."
         }
         className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors duration-200 ${
           localOnly
             ? "border-[var(--color-grape)]/40 bg-[var(--color-grape-soft)] text-[var(--color-grape)]"
-            : "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-soft)] hover:border-[var(--color-brand)]"
+            : unavailable
+              ? "cursor-not-allowed border-[var(--color-line)] bg-[var(--color-surface-2)] text-[var(--color-ink-faint)]"
+              : "border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-soft)] hover:border-[var(--color-brand)]"
         }`}
       >
         <span
           aria-hidden
           className={`size-1.5 rounded-full ${
-            localOnly ? "bg-[var(--color-grape)]" : "bg-[var(--color-mint)]"
+            localOnly
+              ? "bg-[var(--color-grape)]"
+              : unavailable
+                ? "bg-[var(--color-ink-faint)]"
+                : "bg-[var(--color-mint)]"
           }`}
         />
         {localOnly ? "Local AI" : "Cloud AI"}
+        {unavailable && <span className="text-[10px] opacity-70">· cloud only</span>}
       </button>
-      <button 
-        type="button" 
-        onClick={() => alert("Cloud AI uses Groq to give you the fastest, smartest results, but consumes your daily API quota.\\n\\nLocal AI runs the AI 'brain' locally on your machine, using zero API quota, but may be slower and slightly less capable.\\n\\nNote: Both modes still require internet access to fetch live weather, maps, and web search results.")}
-        className="w-8 h-8 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] flex items-center justify-center text-[var(--color-ink-soft)] hover:border-[var(--color-brand)] hover:text-[var(--color-brand)] transition-colors"
+
+      <button
+        type="button"
+        onClick={() =>
+          setNotice(
+            notice
+              ? null
+              : "Cloud AI uses Groq for the fastest, strongest results, and spends daily API quota.\n\n" +
+                  "Local AI runs the model on your own machine through Ollama. It spends no quota, but it is slower and a little less capable.\n\n" +
+                  "Either way the tools still need the internet - weather, maps and web search are live services.",
+          )
+        }
+        className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] text-[var(--color-ink-soft)] transition-colors hover:border-[var(--color-brand)] hover:text-[var(--color-brand)]"
         title="What is this?"
       >
         <IconInfo size="1em" />
       </button>
+
+      {/* An inline panel rather than `alert()`. A native dialog blocks the
+          page, cannot be styled, and reads as a browser error - the wrong
+          register entirely for explaining a capability. */}
+      {notice && (
+        <div
+          role="status"
+          className="absolute bottom-full left-0 z-40 mb-2 w-80 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] p-3 text-xs leading-relaxed text-[var(--color-ink-soft)] shadow-lg"
+        >
+          <p className="whitespace-pre-line">{notice}</p>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="mt-2 font-medium text-[var(--color-brand-strong)]"
+          >
+            Got it
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * How much cloud quota is left, across every configured key.
+ *
+ * This exists because the binding limit on this project is invisible. Groq
+ * caps **tokens per day per model** and reports that figure in no header, so
+ * the first sign of running out is the agent failing mid-plan. Knowing the
+ * remaining budget before a demo is the difference between a confident run and
+ * a surprise.
+ *
+ * The number is honest about being an estimate - see `KeyQuota.measured`. It
+ * counts what this server has spent since it started, so a restart or a second
+ * instance makes it read high, and it says so on the expanded panel rather
+ * than presenting arithmetic as a reading.
+ */
+function QuotaMeter({ system }: { system: SystemStatus | null }) {
+  const [open, setOpen] = useState(false);
+
+  if (!system || !system.quota.configured) return null;
+  const { total, keys, available_keys, total_keys, basis } = system.quota;
+
+  const share = total.limit > 0 ? total.remaining / total.limit : 0;
+  const tone =
+    share > 0.4
+      ? "text-[var(--color-mint)]"
+      : share > 0.15
+        ? "text-[var(--color-brand-strong)]"
+        : "text-[var(--color-danger)]";
+
+  const compact = (value: number) =>
+    value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((was) => !was)}
+        title="Estimated daily Groq token budget remaining"
+        className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 text-xs font-medium text-[var(--color-ink-soft)] transition-colors hover:border-[var(--color-brand)]"
+      >
+        <span aria-hidden className={`size-1.5 rounded-full ${tone} bg-current`} />
+        <span className={tone}>{compact(total.remaining)}</span>
+        <span className="opacity-70">
+          / {compact(total.limit)} tokens · {available_keys}/{total_keys} keys
+        </span>
+      </button>
+
+      {open && (
+        <div className="absolute bottom-full left-0 z-40 mb-2 w-[22rem] rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface)] p-3 shadow-lg">
+          <p className="mb-2 text-xs font-semibold text-[var(--color-ink)]">
+            Daily budget per key
+          </p>
+
+          <ul className="space-y-2">
+            {keys.map((entry) => {
+              const left =
+                entry.quota.limit > 0 ? entry.quota.remaining / entry.quota.limit : 0;
+              return (
+                <li key={entry.key} className="text-[11px]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[var(--color-ink-soft)]">
+                      {entry.key}
+                    </span>
+                    <span className="text-[var(--color-ink-faint)]">
+                      {compact(entry.quota.remaining)} left
+                      {!entry.available && " · cooling down"}
+                    </span>
+                  </div>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-2)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--color-brand)]"
+                      style={{ width: `${Math.max(Math.min(left, 1), 0) * 100}%` }}
+                    />
+                  </div>
+                  {entry.quota.models.length > 0 && (
+                    <p className="mt-1 text-[10px] text-[var(--color-ink-faint)]">
+                      {entry.quota.models
+                        .map(
+                          (m) =>
+                            `${m.model.split("/").pop()}: ${compact(m.remaining)}${
+                              m.measured ? " (measured)" : ""
+                            }`,
+                        )
+                        .join(" · ")}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          <p className="mt-3 border-t border-[var(--color-line)] pt-2 text-[10px] leading-relaxed text-[var(--color-ink-faint)]">
+            {basis}
+          </p>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="mt-2 text-[11px] font-medium text-[var(--color-brand-strong)]"
+          >
+            Close
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1413,6 +1610,31 @@ function Thinking({ progress }: { progress: ProgressEvent[] }) {
 }
 
 /**
+ * The slice of the Web Speech API this component actually uses.
+ *
+ * Declared here because `SpeechRecognition` is not in TypeScript's DOM library
+ * - it is still a draft spec, shipped only behind a `webkit` prefix in Chrome
+ * and Edge. The alternative was `any`, which switched off type checking for
+ * every line below and failed the lint rule that gates the production build.
+ * Describing only the four members used keeps the declaration honest: this is
+ * what the code touches, not a guess at the whole interface.
+ */
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+interface SpeechRecognitionResultEvent {
+  results: ArrayLike<ArrayLike<{ transcript: string }>>;
+}
+
+/**
  * A microphone button that transcribes speech into text using the Web Speech API.
  *
  * Falls back gracefully: if the browser does not support speech recognition
@@ -1427,7 +1649,7 @@ function VoiceInput({
   disabled?: boolean;
 }) {
   const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<any | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const [supported, setSupported] = useState(false);
 
   useEffect(() => {
@@ -1451,12 +1673,12 @@ function VoiceInput({
       (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
     if (!SR) return;
 
-    const recognition = new (SR as new () => any)();
+    const recognition = new (SR as new () => SpeechRecognitionLike)();
     recognition.lang = ""; // auto-detect language
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event: SpeechRecognitionResultEvent) => {
       const transcript = event.results[0][0].transcript;
       if (transcript.trim()) onTranscript(transcript.trim());
     };

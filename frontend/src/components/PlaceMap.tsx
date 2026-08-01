@@ -4,6 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ItineraryItem } from "@/lib/api";
 import type { Map as MapboxMap, Marker, Popup } from "mapbox-gl";
 
+// Statically imported, unlike the library itself. `await import(...)` of a CSS
+// file is not a module TypeScript can resolve a type for, and it failed the
+// production build outright - `next build` type-checks, so what worked in dev
+// never once compiled for deployment. The library still loads dynamically
+// below to keep it out of the server bundle; a stylesheet has no SSR problem
+// to avoid, so there was never a reason for it to be deferred with it.
+import "mapbox-gl/dist/mapbox-gl.css";
+
 export interface MappedItem extends ItineraryItem {
   index: number;
   dayNumber: number;
@@ -96,9 +104,9 @@ export function PlaceMap({
     let cancelled = false;
 
     async function boot() {
-      // Import mapbox-gl dynamically to avoid SSR issues
+      // Import mapbox-gl dynamically to avoid SSR issues. Its stylesheet is
+      // imported statically at the top of the file - see the note there.
       const mapboxgl = (await import("mapbox-gl")).default;
-      await import("mapbox-gl/dist/mapbox-gl.css");
       if (cancelled || !container.current) return;
       mapboxglRef.current = mapboxgl;
 
