@@ -310,12 +310,13 @@ Destination photos are seeded placeholders, labelled as illustrative.
 - `docs/WORKFLOW.md` — plain-language request walkthrough for non-engineers
 - `docs/TESTING.md` — runbook: how to start everything and verify each claim
 - `docs/AUDIT.md` — 30 Jul 2026 diagnostic pass: what was broken and why
-- `scripts/` — verify_setup.py, apply_migrations.py, smoke_test.py
+- `docs/TECHNICAL_DOCUMENT.md` — the single self-contained submission document
+- `scripts/` — verify_setup.py, apply_migrations.py, smoke_test.py, reset_data.py
 - Module docstrings carry the detailed reasoning; keep them current.
 
 ## Status
 
-Backend and frontend complete, 238 tests passing. Verified end-to-end against
+Backend and frontend complete, 248 tests passing. Verified end-to-end against
 live Supabase, Groq, Gemini, Tavily, Geoapify and Wikivoyage: planning, dynamic
 tool selection, multi-hop RAG, memory extraction and cross-session recall,
 clarification, Japanese replies, and the admin trace all confirmed working.

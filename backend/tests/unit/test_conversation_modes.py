@@ -503,7 +503,7 @@ def test_flights_without_an_origin_still_clarify() -> None:
 
 
 def test_a_greeting_does_not_rebuild_the_trip() -> None:
-    """"heloo buddy" produced a complete two-day itinerary.
+    """A bare greeting used to produce a complete two-day itinerary.
 
     Once an outline is confirmed the flag sticks, so that later edits refine
     the trip instead of restarting the conversation. The cost was that every

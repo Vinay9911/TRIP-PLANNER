@@ -669,6 +669,24 @@ Three properties, each guarding a mistake that is easy to ship:
   attacker sign tokens using the *public* key as an HMAC secret.
 - **Never trust a role claim.** Admin status is read from the database.
 
+**There is no login wall, and that is a product decision rather than a
+security one.** Opening the planner provisions an anonymous Supabase session,
+so a first-time visitor reaches a working agent without an account. What
+matters is what did *not* change: an anonymous session is a real Supabase
+identity carrying a signed JWT with a real `sub`, so every property above
+still holds and §8.2's isolation still runs against a genuine `auth.uid()`.
+The backend cannot distinguish an anonymous caller from a registered one and
+does not try.
+
+The alternative — dropping auth and hardcoding a demo user id — would have
+been far less work and would have quietly destroyed all three properties at
+once, collapsing every visitor onto one profile so that one person's dietary
+constraint appeared in another person's itinerary.
+
+Signing in remains available and is required for exactly one thing: the admin
+trace dashboard reads across users, so it needs a role only the service role
+can grant.
+
 ---
 
 ## 9. Multilingual support

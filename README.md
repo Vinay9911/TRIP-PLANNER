@@ -16,9 +16,12 @@ POST /api/v1/chat
 
 - **Live API** — _deployment URL goes here once deployed_
 - **Interactive docs** — `/docs` (OpenAPI/Swagger, generated from the code)
-- **Technical document** — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **Technical document** — [docs/TECHNICAL_DOCUMENT.md](docs/TECHNICAL_DOCUMENT.md)
+  — architecture, tools, setup, evaluation and limitations in one place
+- **Design rationale in depth** — [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **Plain-language walkthrough** — [docs/WORKFLOW.md](docs/WORKFLOW.md)
 - **How to run and verify it yourself** — [docs/TESTING.md](docs/TESTING.md)
+- **A measured diagnostic pass** — [docs/AUDIT.md](docs/AUDIT.md)
 
 ---
 
@@ -150,8 +153,10 @@ that because the wrong answer is zero kilometres from where you were looking.
 So the match type and confidence are read, and anything that only resolved the
 qualifier is discarded. Fewer pins, no wrong ones.
 
-Leaflet and OpenStreetMap tiles — no Google Maps key, no card, no quota.
-Photographs come from Wikivoyage, Wikipedia and Wikimedia Commons, all
+Mapbox GL renders the map, with street, satellite and terrain styles. It needs
+a free token (`NEXT_PUBLIC_MAPBOX_TOKEN`); without one the map area stays
+empty and a console warning says so, while the rest of the interface carries on
+working. Photographs come from Wikivoyage, Wikipedia and Wikimedia Commons, all
 keyless, and anything that is not a picture of the exact place is labelled as
 representative rather than passed off as real.
 
@@ -166,20 +171,38 @@ representative rather than passed off as real.
 - **Degrades instead of failing.** A dead weather API costs you the forecast,
   not the itinerary.
 
-### Recent Enhancements
+### Starts working without an account
 
-- **Premium, Dynamic UI:** A completely overhauled, compact landing page with 
-  beautiful textures, dynamic text animations ("Plan your next adventure in seconds"), 
-  and highly optimized visual spacing to reduce scrolling and improve UX.
-- **Session Management:** The Dashboard and App Shell now feature a one-click 
-  **Delete Trip** capability allowing you to instantly erase old conversations 
-  and keep your trip history clean.
-- **Smart Conversational Scoping:** The agent is intelligent enough to differentiate 
-  between "rebuild my 4-day itinerary" and "recommend some places to eat", 
-  smoothly dropping into a conversational text response when appropriate instead 
-  of blindly regurgitating the itinerary widget.
-- **Polished Weather Widgets:** The weather module natively formats precise 
-  dates and days dynamically, offering a visually stunning read out of the forecast.
+There is no login wall. Opening the planner provisions an anonymous Supabase
+session, so a reviewer goes from the landing page to a working agent in one
+click. That is a change to the *front door*, not to the security model: an
+anonymous session is a genuine Supabase identity with a signed JWT, so the API
+still verifies every request and row level security still isolates every
+traveller against a real `auth.uid()`. The session persists in the browser,
+which is also what makes long-term memory demonstrable — close the tab, come
+back, and it still knows you are vegetarian.
+
+Signing in still exists at `/login`; it is simply only needed for the admin
+trace dashboard, which reads across users and therefore needs a role the
+service role has granted.
+
+### Shows how much quota is left before you run out
+
+Groq's binding limit is **tokens per day per model**, and it is reported in no
+header — so the first sign of exhaustion is normally the agent failing
+mid-plan. The composer carries a meter: remaining tokens across every
+configured key, and a breakdown per key and per model.
+
+It is honest about what it knows. The figures are counted from what this
+server has spent since it started, so they are labelled an estimate — until
+Groq refuses a call and quotes real numbers in the 429 body, at which point
+that model flips to **measured** and the quoted figure replaces the
+arithmetic.
+
+The same status call reports whether a local model is reachable. On the hosted
+deployment it is not — Ollama runs on your machine, not Render's — so the
+Local AI switch disables itself and says why, instead of accepting the click
+and failing thirty seconds into a plan.
 
 ---
 
@@ -236,8 +259,10 @@ pip install -e ".[dev]"
 | **Tavily** (web search) | [app.tavily.com](https://app.tavily.com) | 1,000 credits/mo |
 | **Geoapify** (places) | [myprojects.geoapify.com](https://myprojects.geoapify.com) | 3,000 credits/day |
 | **Supabase** (database + auth) | [supabase.com](https://supabase.com) → New project | 500 MB, 50k users |
+| **Mapbox** (map tiles, optional) | [account.mapbox.com](https://account.mapbox.com/access-tokens/) | 50k map loads/mo |
 
-Open-Meteo and Wikivoyage need no key.
+Open-Meteo and Wikivoyage need no key. Mapbox is the only optional one: without
+it every panel still works and the map area stays blank.
 
 > **The Groq limit that actually bites is tokens per day, not requests.**
 > 100,000 per model per account, and it appears in *no response header* — the
@@ -280,9 +305,13 @@ Two things worth knowing before you rely on it:
 1. Create a project. **Save the database password** — it goes in
    `DATABASE_URL` and is not shown again.
 2. Run the migrations in order. In the dashboard: **SQL Editor → New query**,
-   then paste and run each of `supabase/migrations/0001…0008` in sequence.
+   then paste and run each of `supabase/migrations/0001…0009` in sequence.
    They are idempotent, so re-running is safe.
-3. Collect the credentials:
+3. **Authentication → Sign In / Providers → enable "Allow anonymous
+   sign-ins".** The app provisions a session on arrival instead of showing a
+   login form, and that switch is off by default in new projects — without it
+   every visitor sees "Could not start a session".
+4. Collect the credentials:
    - **Project Settings → Data API** → Project URL
    - **Project Settings → API Keys** → `anon` and `service_role`
    - **Project Settings → Database → Connection string → URI** — use the
@@ -301,9 +330,20 @@ Two things worth knowing before you rely on it:
 </details>
 
 <details>
-<summary><b>Making yourself an admin</b></summary>
+<summary><b>The admin trace dashboard</b></summary>
 
-Sign up through the app first (the profile row is created on first signup),
+**On this demo deployment it is open to everyone**, via
+`PUBLIC_ADMIN_DASHBOARD=true`. That is deliberate: the trace dashboard is the
+evidence for most of what this README claims — that tool selection is dynamic,
+that retrieval genuinely chains, that a specific answer was shaped by specific
+remembered facts — and asking a reviewer to obtain credentials before they can
+check any of it defeats the point of showing the work. The trade is that
+visitors can see one another's trips, which is acceptable for a demo holding
+no real user data and wrong for anything else.
+
+**For a deployment with real users, leave it `false`** (the default) and
+promote one account instead. Sign in once at `/login` — the route still
+exists, it is simply not required any more — which creates the profile row,
 then in the Supabase SQL Editor:
 
 ```sql
@@ -343,12 +383,13 @@ Fill in `.env.local`:
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key_here
 NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_MAPBOX_TOKEN=pk.your_mapbox_public_token_here   # optional
 ```
 
-All three are `NEXT_PUBLIC_` and visible in the browser bundle, which is
+All of these are `NEXT_PUBLIC_` and visible in the browser bundle, which is
 correct for each: the anon key is designed to be public and is constrained by
-row level security. **Never put the `service_role` key here** — it bypasses
-RLS entirely.
+row level security, and a Mapbox public token is scoped to exactly that use.
+**Never put the `service_role` key here** — it bypasses RLS entirely.
 
 ---
 
@@ -461,6 +502,7 @@ curl -X POST http://localhost:8000/api/v1/chat \
 | `DELETE` | `/api/v1/me/memories/{id}` | Forget one thing |
 | `POST` | `/api/v1/me/memory-settings` | Turn memory off |
 | `DELETE` | `/api/v1/me/data` | Erase everything |
+| `GET` | `/api/v1/system/status` | Local-model availability and remaining Groq quota |
 | `GET` | `/api/v1/admin/users` | *(admin)* All users |
 | `GET` | `/api/v1/admin/users/{id}` | *(admin)* Profile, sessions, memories |
 | `GET` | `/api/v1/admin/runs/{id}` | *(admin)* **Full execution trace** |
@@ -497,13 +539,18 @@ python scripts/apply_migrations.py
 
 # End-to-end functional test against a running API
 python scripts/smoke_test.py --email you@example.com --password '...'
+
+# Erase every conversation, memory and trace, leaving the schema intact.
+# Counts first and changes nothing unless --apply is passed.
+python scripts/reset_data.py
+python scripts/reset_data.py --apply --keep-rag-cache
 ```
 
 The unit suite:
 
 ```bash
 cd backend
-PYTHONIOENCODING=utf-8 pytest -q                     # 238 tests
+PYTHONIOENCODING=utf-8 pytest -q                     # 248 tests
 pytest --cov=app --cov-report=term-missing
 pytest tests/unit/test_memory_consolidation.py -v    # the memory pipeline
 ```
@@ -525,23 +572,73 @@ No network, no database, no API keys. Notable coverage:
 
 ## Deployment
 
-Deploys to [Render](https://render.com) from the committed
-[`render.yaml`](render.yaml).
+Three services, all on genuine free tiers, no card required:
 
-1. Push to GitHub.
-2. Render → **New → Blueprint** → select the repository.
-3. Supply the secrets it prompts for (everything marked `sync: false`).
-4. Set `CORS_ORIGINS` to your frontend's origin.
+| Part | Platform | Why |
+|---|---|---|
+| API (FastAPI, Docker) | **Render** free web service | 512 MB, no card, Singapore region next to the database |
+| Web (Next.js) | **Vercel** Hobby | Next.js is Vercel's own framework; zero configuration |
+| Database | **Supabase** free | Already the datastore — nothing further to deploy |
 
-Two free-tier facts, handled rather than hidden:
+Railway is *not* a free option any more: after a 30-day trial it requires a
+minimum of $1/month, caps a project at 0.5 GB RAM, and allows one project —
+which will not hold an API and a database together.
+
+### 1. Database
+
+Follow [Setup → Set up Supabase](#3-set-up-supabase). Confirm anonymous
+sign-ins are enabled, or the deployed site cannot create sessions.
+
+### 2. API on Render
+
+1. Push the repository to GitHub.
+2. Render → **New → Blueprint** → select the repository. It reads the
+   committed [`render.yaml`](render.yaml), so the service, region, health check
+   path and non-secret configuration are already described.
+3. Supply the secrets it prompts for — everything marked `sync: false`:
+   `GROQ_API_KEY`, `GEMINI_API_KEY`, `TAVILY_API_KEY`, `GEOAPIFY_API_KEY`,
+   `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `SUPABASE_JWKS_URL`, `DATABASE_URL`, `HTTP_USER_AGENT`.
+   - `DATABASE_URL` must be the **session pooler on 5432**, not 6543.
+   - `HTTP_USER_AGENT` must name a real contact, or Wikimedia returns 403.
+4. Leave `CORS_ORIGINS` for now — the frontend does not have a URL yet.
+5. Deploy, then check `https://<your-api>.onrender.com/health/ready` reports
+   `"ready": true`.
+
+### 3. Web on Vercel
+
+1. Vercel → **Add New → Project** → import the same repository.
+2. Set **Root Directory** to `frontend`. Everything else is detected.
+3. Environment variables:
+   ```
+   NEXT_PUBLIC_SUPABASE_URL        https://<ref>.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY   <anon key>
+   NEXT_PUBLIC_API_URL             https://<your-api>.onrender.com
+   NEXT_PUBLIC_MAPBOX_TOKEN        pk.…        (optional)
+   ```
+4. Deploy.
+
+### 4. Close the loop
+
+1. Back in Render, set `CORS_ORIGINS` to the Vercel URL — exactly, with the
+   scheme and no trailing slash. The API sends credentials, so the origin list
+   is explicit and `*` is neither accepted nor safe.
+2. In Supabase → **Authentication → URL Configuration**, add the Vercel URL to
+   **Site URL** and **Redirect URLs**.
+3. Add the repository secret `API_URL` (your Render URL) so the keep-warm
+   workflow can reach it.
+
+### The two free-tier facts, handled rather than hidden
 
 - Render sleeps after **15 minutes** idle (30–60 s cold start).
 - Supabase pauses a project after **7 days** of no database activity.
 
 [`.github/workflows/keep-warm.yml`](.github/workflows/keep-warm.yml) pings
 `/health/ready` every 10 minutes, which fixes both — that endpoint touches the
-database, so it counts as activity. Set the repository secret `API_URL` to
-your deployed URL. On a paid plan, delete the workflow.
+database, so it counts as activity. Note the arithmetic: Render grants 750
+free instance-hours a month and staying awake continuously costs about 720, so
+this fits, but only for a single free service. On a paid plan, delete the
+workflow.
 
 ---
 
@@ -556,9 +653,9 @@ backend/app/
 ├── tools/        8 tools + registry                  ← the model's action surface
 ├── memory/       short_term + extractor/consolidator/store/service
 ├── rag/          corpus, chunking, index, retriever
-├── agent/        state, graph, runner, nodes/
+├── agent/        state, trip_state, graph, runner, nodes/
 └── api/          deps + v1/routes/
-supabase/migrations/    0001–0007
+supabase/migrations/    0001–0009
 ```
 
 `agent/` imports `tools/`; `tools/` never imports `agent/`. A tool that knows
@@ -581,23 +678,29 @@ does not.
 - **The grounding check is a heuristic.** It flags named venues and prices
   absent from the retrieved evidence and logs them for the admin dashboard.
   It does not block the response, and it has false positives.
-- **Groq's free tier is limited by tokens-per-minute, not requests.** Measured
-  from the live API: `llama-3.3-70b-versatile` allows **12,000 TPM** and 1,000
-  requests/day per key. A full itinerary run costs ~30–50k tokens, because the
-  executor resends its tool schemas and accumulated findings on every ReAct
-  round trip. So the daily request budget is ample and the *per-minute token*
-  budget is what actually fails a request.
+- **Groq's free tier is limited by tokens per _day_, per model.** Measured
+  against the live API: **100,000 tokens/day** for
+  `llama-3.3-70b-versatile`, and the figure appears in *no response header*.
+  The `x-ratelimit-*` headers describe only the per-minute window (12,000 TPM
+  for that model), so a key can report "11,959 tokens remaining" while being
+  entirely out of daily budget. The only place the daily number is ever stated
+  is the body of the 429 it eventually returns.
 
-  This is why `GROQ_API_KEY` takes a comma-separated list: **each key adds
-  another 12,000 TPM**, and the pool rotates across them. Two keys handles
-  single-user use with occasional stalls; four or more makes back-to-back runs
-  comfortable. (Checked the alternatives - `llama-3.1-8b-instant` has *less*
-  TPM at 6,000, and the `gpt-oss` models 8,000, so the 70B model is already the
-  most generous choice.)
+  An earlier version of this document diagnosed the ceiling as *per minute*
+  and was wrong for exactly that reason — the headers were believed over the
+  behaviour. One full itinerary costs 30–50k tokens, because the executor
+  resends its tool schemas and accumulated findings on every ReAct round trip,
+  so a single key is worth roughly two or three complete plans a day.
 
-  When every key is momentarily spent, the agent says so plainly - "I hit my
-  request limit part-way through planning, try again in a minute" - rather than
-  blaming the travel data sources, which answered fine.
+  Two things follow. `GROQ_API_KEY` takes a comma-separated list and keys from
+  **separate accounts** each carry their own 100k allowance; the pool rotates
+  across them. And because the budget is per *model*, a spent bucket is not
+  the end — `models_for_role` steps down a fallback chain, so an exhausted
+  executor model moves to another rather than failing.
+
+  The composer shows the remaining estimate so this is visible before it
+  bites, and when everything really is spent the agent says so plainly rather
+  than blaming the travel data sources, which answered fine.
 - **Wikivoyage coverage is uneven.** Major cities have rich district articles;
   smaller destinations may have only one page, in which case hop 2 is skipped
   and `stopped_because` says so.

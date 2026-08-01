@@ -220,9 +220,7 @@ async def chat_stream(
         try:
             while True:
                 drain = asyncio.create_task(queue.get())
-                done, _ = await asyncio.wait(
-                    {drain, turn}, return_when=asyncio.FIRST_COMPLETED
-                )
+                done, _ = await asyncio.wait({drain, turn}, return_when=asyncio.FIRST_COMPLETED)
 
                 if drain in done:
                     yield _sse(drain.result().to_dict())
@@ -245,8 +243,7 @@ async def chat_stream(
             yield _sse(
                 {
                     "kind": "done",
-                    "error": "Something went wrong while planning your trip. "
-                    "Please try again.",
+                    "error": "Something went wrong while planning your trip. Please try again.",
                 }
             )
             return

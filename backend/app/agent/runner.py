@@ -365,12 +365,8 @@ class AgentRunner:
                         "mode": final_state.get("mode", "plan"),
                         "destination": final_state.get("destination"),
                         "itinerary": itinerary,
-                        "suggested_options": list(
-                            final_state.get("suggested_options") or []
-                        ),
-                        "suggested_places": list(
-                            final_state.get("suggested_places") or []
-                        ),
+                        "suggested_options": list(final_state.get("suggested_options") or []),
+                        "suggested_places": list(final_state.get("suggested_places") or []),
                         "suggested_actions": suggested_actions,
                         "trip_facts": facts,
                     },

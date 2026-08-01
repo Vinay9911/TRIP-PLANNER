@@ -35,9 +35,7 @@ def _step(description: str, *, kind: str = "research", independent: bool = False
     Returns:
         The step.
     """
-    return PlanStep(
-        description=description, kind=kind, depends_on_previous=not independent
-    )
+    return PlanStep(description=description, kind=kind, depends_on_previous=not independent)
 
 
 def test_a_dependent_step_runs_alone() -> None:
@@ -123,9 +121,7 @@ async def test_concurrent_steps_keep_their_own_tool_calls(
         own = _recorder.get()
         if own is not None:
             own.append(
-                ToolCallRecord(
-                    tool_name=name, status=ToolStatus.OK, source="test", latency_ms=1
-                )
+                ToolCallRecord(tool_name=name, status=ToolStatus.OK, source="test", latency_ms=1)
             )
         return f"findings from {name}"
 

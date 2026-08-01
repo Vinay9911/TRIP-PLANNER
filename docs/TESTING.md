@@ -69,7 +69,7 @@ If the database check fails, see [Troubleshooting](#10-troubleshooting).
 
 ## 3. Run the unit tests
 
-238 tests. No network, no database, no API keys — so they are fast and cannot
+248 tests. No network, no database, no API keys — so they are fast and cannot
 fail because a third party had a bad afternoon.
 
 ```bash

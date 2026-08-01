@@ -30,6 +30,10 @@ out/
 .chroma/
 local_data/
 
+# --- Private notes -----------------------------------------------------------
+# Personal demo/interview preparation. Deliberately not published.
+MY_DEMO_GUIDE.md
+
 # --- Editors / OS ------------------------------------------------------------
 .vscode/
 .idea/

@@ -203,7 +203,7 @@ city, area or district inside it, set `destination` to that narrower place. \
 "Let's do Mumbai" after discussing India means the destination is now Mumbai; \
 leaving it as India would plan the wrong trip. The same applies to picking one \
 of several options you offered ("Rugged Coastlines", "the backwaters") - if it \
-identifies a specific place, extract it. 
+identifies a specific place, extract it.
 
 CRITICAL: A country or a broad region (e.g., "USA", "United States", "Europe", "Kerala") \
 IS a valid destination. If the traveller names a country, extract it into the \
@@ -212,7 +212,7 @@ Only leave `destination` null when this message genuinely does not indicate \
 where they are going.
 
 Set wants_full_plan only for an explicit request or a clear acceptance of a \
-proposed outline. 
+proposed outline.
 
 CRITICAL: Set `scoped_service` to one of ('flights', 'stays', 'restaurants', \
 'attractions', 'weather') if the user asks for ONE specific thing (e.g. \

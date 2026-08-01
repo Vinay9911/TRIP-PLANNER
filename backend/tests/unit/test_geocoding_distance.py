@@ -156,9 +156,7 @@ async def test_a_city_fallback_match_is_not_a_pin(monkeypatch: pytest.MonkeyPatc
         ),
     )
 
-    result = await geocode_landmark(
-        "Catskill Mountains", near="New York", centre=(40.714, -74.006)
-    )
+    result = await geocode_landmark("Catskill Mountains", near="New York", centre=(40.714, -74.006))
 
     assert result is None
 
