@@ -95,11 +95,11 @@ const CAPABILITIES = [
   {
     icon: IconCompass,
     title: "Build an itinerary",
-    hint: "Tell it a place — it suggests, asks, then plans",
+    hint: "Tell it a place — it suggests, asks, then plan your perfect days.",
     prompt: "I want to go to ",
     tint: "bg-[var(--color-gold-soft)] text-[var(--color-gold)]",
     span: "sm:col-span-2 sm:row-span-2",
-    art: "kyoto travel",
+    image: "/images/build_itinerary.png",
   },
   {
     icon: IconPlane,
@@ -108,7 +108,7 @@ const CAPABILITIES = [
     prompt: "Find me flights to ",
     tint: "bg-[var(--color-sky-soft)] text-[var(--color-sky)]",
     span: "",
-    art: "airplane sky",
+    image: "/images/find_flights.png",
   },
   {
     icon: IconBed,
@@ -117,7 +117,7 @@ const CAPABILITIES = [
     prompt: "Find me a place to stay in ",
     tint: "bg-[var(--color-grape-soft)] text-[var(--color-grape)]",
     span: "",
-    art: "hotel room",
+    image: "/images/find_stay.png",
   },
   {
     icon: IconTicket,
@@ -126,7 +126,7 @@ const CAPABILITIES = [
     prompt: "What are the best things to see in ",
     tint: "bg-[var(--color-rose-soft)] text-[var(--color-rose)]",
     span: "",
-    art: "landmark monument",
+    image: "/images/see_attractions.png",
   },
   {
     icon: IconFork,
@@ -135,15 +135,15 @@ const CAPABILITIES = [
     prompt: "Where should I eat in ",
     tint: "bg-[var(--color-mint-soft)] text-[var(--color-mint)]",
     span: "",
-    art: "restaurant food",
+    image: "/images/eat_well.png",
   },
 ] as const;
 
 const EXAMPLES = [
-  "I want to go to Kerala",
-  "Plan me 2 relaxed days in Kyoto. I'm vegetarian.",
-  "Will I need an umbrella in Singapore next week?",
-  "मुझे 3 दिन का गोवा का प्लान बनाओ (Hindi — try any language!)",
+  { text: "I want to go to Kerala", icon: "🌴" },
+  { text: "Plan me 2 relaxed days in Kyoto. I'm vegetarian.", icon: "⛩️" },
+  { text: "Will I need an umbrella in Singapore next week?", icon: "☔" },
+  { text: "मुझे 3 दिन का गोवा का प्लान बनाओ (Hindi — try any language!)", icon: "🗺️" },
 ];
 
 export default function ChatPage() {
@@ -514,10 +514,15 @@ function Chat({ onConversationSaved }: { onConversationSaved: () => void }) {
             }}
             disabled={busy}
           />
-          <Button type="submit" disabled={busy || !input.trim()} aria-label="Send message">
-            <IconSend size="1.1em" />
+          <button 
+            type="submit" 
+            disabled={busy || !input.trim()} 
+            aria-label="Send message"
+            className="flex h-11 items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand)] to-[var(--color-brand-strong)] px-4 font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            <IconSend size="1.2em" />
             <span className="hidden sm:inline">Send</span>
-          </Button>
+          </button>
         </form>
 
         <p className="text-center text-[11px] text-[var(--color-ink-faint)]">
@@ -554,37 +559,47 @@ function Welcome({
 }) {
   return (
     <div className="rise-in py-4">
-      <div className="flex items-center gap-2">
-        <Badge tone="accent">
+      {/* Banner & Header Section */}
+      <div className="relative mb-3 flex flex-col md:flex-row justify-between rounded-2xl bg-[var(--color-surface-2)] p-4 md:p-6 overflow-hidden isolate">
+        <div className="z-10 max-w-xl md:mr-[200px]">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg">👋</span>
+            <span className="text-xs font-medium text-[var(--color-ink-soft)]">
+              Hi Vinay, ready for your next adventure?
+            </span>
+          </div>
+
+          <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight sm:text-3xl text-[var(--color-ink)]">
+            Let's plan your{" "}
+            <span className="text-[var(--color-brand)]">
+              perfect trip ✦
+            </span>
+          </h1>
+          <p className="mt-2 text-xs leading-relaxed text-[var(--color-ink-soft)] max-w-sm">
+            Tell me a place and I'll suggest, ask the right questions, then build the
+            plan — or jump straight to one specific thing.
+          </p>
+        </div>
+        {/* Absolute positioned background image covering the right side */}
+        <div className="hidden md:block absolute right-0 top-0 bottom-0 w-[50%] opacity-80 -z-10 mask-image-to-l">
+           <img src="/images/header_banner.png" alt="Tropical resort" className="w-full h-full object-cover rounded-r-2xl mask-fade-l" style={{ WebkitMaskImage: 'linear-gradient(to right, transparent 0%, black 30%)' }} />
+        </div>
+      </div>
+
+      <div className="mt-2 flex items-start gap-2.5 rounded-xl border border-[var(--color-line)] bg-gradient-to-r from-[var(--color-surface)] to-[var(--color-surface-2)] px-4 py-2.5 text-xs shadow-sm">
+        <span className="shrink-0 grid h-6 w-6 place-items-center rounded-full bg-[var(--color-brand-soft)] text-[var(--color-brand-strong)]">
           <IconSparkle size="0.9em" />
-          AI trip partner
-        </Badge>
+        </span>
+        <div className="flex flex-col">
+          <strong className="font-semibold text-[var(--color-ink)]">I help with what matters most.</strong>
+          <p className="leading-relaxed mt-0.5 text-[var(--color-ink-soft)]">
+            Tell me where you're going, how many days, roughly when, who's coming, and any must-haves
+            (diet, budget, pace). I'll ask about anything important that's missing.
+          </p>
+        </div>
       </div>
 
-      <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-        Begin your next{" "}
-        <span className="bg-gradient-to-r from-[var(--color-brand)] to-[var(--color-grape)] bg-clip-text text-transparent">
-          adventure
-        </span>
-      </h1>
-      <p className="mt-2 max-w-xl text-sm leading-relaxed text-[var(--color-ink-soft)]">
-        Name a place and I&apos;ll suggest, ask the right questions, then build the
-        plan — or jump straight to one specific thing.
-      </p>
-
-      <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-brand-soft)]/60 px-4 py-3 text-sm">
-        <span className="mt-0.5 shrink-0 text-[var(--color-brand-strong)]">
-          <IconInfo size="1.1em" />
-        </span>
-        <p className="leading-relaxed">
-          <strong className="font-semibold">What helps most:</strong> where you&apos;re
-          going, how many days, roughly when, who&apos;s coming, and any must-haves
-          (diet, budget, pace). Give what you know — I&apos;ll ask about anything
-          important that&apos;s missing.
-        </p>
-      </div>
-
-      <div className="mt-5 grid auto-rows-[minmax(0,1fr)] gap-3 sm:grid-cols-4">
+      <div className="mt-3 grid auto-rows-[minmax(0,1fr)] gap-2 sm:grid-cols-4">
         {CAPABILITIES.map((capability) => {
           const Glyph = capability.icon;
           const big = capability.span !== "";
@@ -593,48 +608,52 @@ function Welcome({
               key={capability.title}
               type="button"
               onClick={() => onPrompt(capability.prompt)}
-              className={`group relative overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] p-4 text-left transition-[border-color,transform] duration-200 hover:border-[var(--color-brand)] hover:-translate-y-0.5 ${capability.span}`}
+              className={`group relative overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] p-3 text-left transition-[border-color,transform] duration-200 hover:border-[var(--color-brand)] hover:-translate-y-0.5 ${capability.span}`}
             >
-              <span
-                className={`grid h-10 w-10 place-items-center rounded-xl ${capability.tint}`}
-              >
-                <Glyph />
-              </span>
-              <span className="mt-3 block font-display text-sm font-semibold">
-                {capability.title}
-              </span>
-              <span className="mt-0.5 block text-xs leading-relaxed text-[var(--color-ink-soft)]">
-                {capability.hint}
-              </span>
-              {big && (
-                <img
-                  src="/santorini.png"
-                  alt="Build an itinerary"
-                  className="pointer-events-none mt-4 h-28 w-full object-cover rounded-xl opacity-90 transition-transform duration-300 group-hover:scale-[1.02] sm:h-36"
-                />
-              )}
+              <div className="flex items-start gap-2.5">
+                <span
+                  className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${capability.tint}`}
+                >
+                  <Glyph size="1.1em" />
+                </span>
+                <div className="flex flex-col">
+                  <span className="block font-display text-xs font-semibold text-[var(--color-ink)]">
+                    {capability.title}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] leading-relaxed text-[var(--color-ink-soft)] pr-1">
+                    {capability.hint}
+                  </span>
+                </div>
+              </div>
+              <img
+                src={capability.image}
+                alt={capability.title}
+                className={`pointer-events-none w-full object-cover rounded-lg opacity-90 transition-transform duration-300 group-hover:scale-[1.03] ${big ? 'mt-2 h-16 sm:h-24' : 'mt-2 h-12 sm:h-16'}`}
+              />
             </button>
           );
         })}
       </div>
-
-      <p className="mt-6 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
-        Or try one of these
-      </p>
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        {EXAMPLES.map((example) => (
-          <button
-            key={example}
-            type="button"
-            onClick={() => onPick(example)}
-            className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] px-3.5 py-2.5 text-left text-sm transition-colors duration-200 hover:border-[var(--color-brand)]"
-          >
-            <span>{example}</span>
-            <span className="shrink-0 text-[var(--color-ink-faint)]">
-              <IconChevron size="0.95em" />
-            </span>
-          </button>
-        ))}
+      <div className="mt-4 pb-12">
+        <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)] mb-1.5">
+          Try one of these
+        </p>
+        <div className="grid gap-1.5 sm:grid-cols-2">
+          {EXAMPLES.map((example, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onPick(example.text)}
+              className="flex items-center justify-between rounded-lg border border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-ink-soft)] transition-colors duration-200 hover:border-[var(--color-brand)] hover:text-[var(--color-ink)] text-left"
+            >
+              <span className="flex items-center gap-1.5 truncate">
+                <span className="text-sm">{example.icon}</span>
+                <span className="truncate">{example.text}</span>
+              </span>
+              <IconChevron className="shrink-0 opacity-50 -rotate-90" size="1.1em" />
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1408,7 +1427,7 @@ function VoiceInput({
   disabled?: boolean;
 }) {
   const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<any | null>(null);
   const [supported, setSupported] = useState(false);
 
   useEffect(() => {
@@ -1432,12 +1451,12 @@ function VoiceInput({
       (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
     if (!SR) return;
 
-    const recognition = new (SR as new () => SpeechRecognition)();
+    const recognition = new (SR as new () => any)();
     recognition.lang = ""; // auto-detect language
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
       if (transcript.trim()) onTranscript(transcript.trim());
     };

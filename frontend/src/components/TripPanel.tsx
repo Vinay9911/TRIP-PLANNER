@@ -185,7 +185,7 @@ function TripSummary({ trip }: { trip: TripState }) {
   return (
     <Panel
       title="Your trip"
-      icon={<IconCompassLite />}
+      icon={<span className="text-[var(--color-sky)]"><IconCompassLite /></span>}
       state={known.length > 0 ? "ready" : "empty"}
       hint="Tell me where you'd like to go and the details will collect here."
     >
@@ -246,7 +246,7 @@ function WeatherPanel({
   return (
     <Panel
       title="Weather"
-      icon={<IconSun size="1em" />}
+      icon={<span className="text-[var(--color-brand)]"><IconSun size="1em" /></span>}
       state={state}
       hint={
         trip.destination
@@ -343,7 +343,7 @@ function StaysPanel({
   return (
     <Panel
       title="Places to stay"
-      icon={<IconBed size="1em" />}
+      icon={<span className="text-[var(--color-grape)]"><IconBed size="1em" /></span>}
       state={state}
       hint={
         destination
@@ -422,7 +422,7 @@ function FlightsPanel({
   return (
     <Panel
       title="Flights"
-      icon={<IconPlane size="1em" />}
+      icon={<span className="text-[var(--color-mint)]"><IconPlane size="1em" /></span>}
       state={state}
       hint={
         trip.origin
@@ -485,7 +485,7 @@ function MapPanel({
     <>
       <Panel
         title={pins.length > 0 ? `Map · ${pins.length} stops` : "Map"}
-        icon={<IconPin size="1em" />}
+        icon={<span className="text-[var(--color-sky)]"><IconPin size="1em" /></span>}
         state={state}
         hint="Places get pinned here as soon as the agent names some."
         action={

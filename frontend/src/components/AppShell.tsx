@@ -30,6 +30,7 @@ import {
   IconBrain,
   IconChart,
   IconChat,
+  IconChevron,
   IconClose,
   IconCompass,
   IconLogout,
@@ -144,12 +145,17 @@ export function AppShell({
   const sidebar = (
     <div className="flex h-full flex-col gap-4 p-4">
       <Link href="/" className="flex items-center gap-2.5 px-1 py-1">
-        <span className="grid h-9 w-9 place-items-center rounded-xl bg-[var(--color-brand)] text-white">
-          <IconCompass />
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-[var(--color-brand)] to-[var(--color-brand-strong)] shadow-sm text-white">
+          <span className="font-display text-xl font-bold">N</span>
         </span>
-        <span className="font-display text-[15px] font-semibold tracking-tight">
-          Trip Planner
-        </span>
+        <div className="flex flex-col">
+          <span className="font-display text-[15px] font-bold tracking-tight text-[var(--color-ink)]">
+            Trip Planner
+          </span>
+          <span className="text-[11px] font-medium text-[var(--color-ink-faint)]">
+            AI Travel Assistant
+          </span>
+        </div>
       </Link>
 
       <Link
