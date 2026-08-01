@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 from enum import StrEnum
 from functools import lru_cache
 from typing import Any, TypeVar
@@ -58,7 +59,7 @@ from tenacity import (
 from app.core.config import Settings, get_settings
 from app.core.errors import ExternalServiceError, RateLimitError
 from app.core.logging import get_logger
-from app.services.keys import AllKeysExhausted, KeyPool, get_pool
+from app.services.keys import AllKeysExhausted, KeyPool, existing_pool, get_pool
 from app.services.usage import is_local_only, record_provider
 from app.services.usage import record as record_usage
 
@@ -171,7 +172,25 @@ class UsageRecordingCallback(BaseCallbackHandler):
     Attributed to `"execute"` rather than a per-call label: the point is to
     make the executor's share of the budget visible, and the individual
     iterations inside one step are not separately meaningful.
+
+    It also charges the key pool, which is why it now takes the key and model
+    it was built for. Without that the executor's spend - the largest share by
+    far - would be missing from the per-key quota estimate, and the remaining
+    budget shown in the interface would be wrong in the most flattering
+    direction possible.
     """
+
+    def __init__(self, *, api_key: str = "", model_name: str = "") -> None:
+        """Bind the handler to the key and model whose calls it will meter.
+
+        Args:
+            api_key: The key `create_agent` was handed. Empty for the local
+                provider, which has no allowance to charge.
+            model_name: The model being called.
+        """
+        super().__init__()
+        self._api_key = api_key
+        self._model_name = model_name
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
         """Record usage from a completed model call.
@@ -201,6 +220,13 @@ class UsageRecordingCallback(BaseCallbackHandler):
 
         if prompt_tokens or completion_tokens:
             record_usage("execute", prompt_tokens, completion_tokens)
+
+            if self._api_key:
+                pool = existing_pool("groq")
+                if pool is not None:
+                    pool.record_tokens(
+                        self._api_key, self._model_name, prompt_tokens + completion_tokens
+                    )
 
 
 def get_llm_pool(settings: Settings | None = None) -> KeyPool:
@@ -366,6 +392,46 @@ def get_model(
     Raises:
         AllKeysExhausted: If every key is currently cooling down.
     """
+    model, _key = get_model_with_key(
+        role,
+        settings=settings,
+        temperature=temperature,
+        model_name=model_name,
+        prefer_local=prefer_local,
+    )
+    return model
+
+
+def get_model_with_key(
+    role: ModelRole,
+    *,
+    settings: Settings | None = None,
+    temperature: float | None = None,
+    model_name: str | None = None,
+    prefer_local: bool = False,
+) -> tuple[BaseChatModel, str]:
+    """Return a model together with the key it was bound to.
+
+    Exists because `create_agent` owns its own call loop: the executor hands it
+    a model object and never sees the individual calls, so the only way to
+    charge that spend to the right key is to know, at construction time, which
+    key went in. `get_model` hides that, which is right for every other caller
+    and wrong for the one that has to meter itself.
+
+    Args:
+        role: Which class of work the call belongs to.
+        settings: Settings override, for tests.
+        temperature: Sampling override.
+        model_name: Use this model instead of the role's default.
+        prefer_local: Force the local provider for this call.
+
+    Returns:
+        The model, and the key backing it - empty string for a local model,
+        which has no credential and no allowance.
+
+    Raises:
+        AllKeysExhausted: If every key is currently cooling down.
+    """
     cfg = settings or get_settings()
     provider = resolve_provider(cfg, prefer_local=prefer_local)
     default_model, resolved_temperature = _resolve_role(role, cfg, temperature, provider)
@@ -391,7 +457,33 @@ def get_model(
     # afterwards, the meter still read zero for every executor step. The
     # handler now travels in the *invocation* config instead - see
     # `_run_step_agent` - which is the level LangChain actually propagates.
-    return model
+    return model, api_key
+
+
+#: Pulls the daily figures out of a Groq 429 body.
+#:
+#: The wording seen live is "...on tokens per day (TPD): Limit 100000, Used
+#: 96696, Requested 1200...". Matched loosely because the exact phrasing is not
+#: contractual - a miss simply means no ground truth this time, and the local
+#: estimate carries on, which is why this never raises.
+_DAILY_FIGURES = re.compile(r"limit\s+(\d+)\s*,\s*used\s+(\d+)", re.IGNORECASE)
+
+
+def _parse_daily_figures(text: str) -> tuple[int, int] | None:
+    """Extract (used, limit) from a rate-limit message.
+
+    Args:
+        text: The provider's error text, already lower-cased by the caller.
+
+    Returns:
+        The used and limit token counts, or None when the message did not
+        carry them.
+    """
+    match = _DAILY_FIGURES.search(text)
+    if match is None:
+        return None
+    limit, used = int(match.group(1)), int(match.group(2))
+    return used, limit
 
 
 def _classify_provider_error(exc: Exception) -> Exception:
@@ -426,11 +518,21 @@ def _classify_provider_error(exc: Exception) -> Exception:
         # a key with budget left rather than cycling a dead one.
         daily = "per day" in text or "tpd" in text
         if daily:
+            # The body is the only place Groq ever states the daily allowance
+            # and how much of it is gone ("Limit 100000, Used 96696"). Parsed
+            # rather than merely logged, because it is the single piece of
+            # ground truth available for the quota display - everything else
+            # this application knows about daily budget is its own arithmetic.
+            details: dict[str, Any] = {"original": str(exc)[:500], "scope": "per_day"}
+            observed = _parse_daily_figures(text)
+            if observed is not None:
+                details["used"], details["limit"] = observed
+
             return RateLimitError(
                 "This API key has used its daily token allowance.",
                 service="groq",
                 retry_after_seconds=DAILY_LIMIT_COOLDOWN_SECONDS,
-                details={"original": str(exc)[:500], "scope": "per_day"},
+                details=details,
             )
 
         return RateLimitError(
@@ -572,6 +674,18 @@ async def _invoke_rotating(
                 pool.report_rate_limited(api_key, error.retry_after_seconds)
                 daily = (error.details or {}).get("scope") == "per_day"
 
+                # Groq just told us exactly where this key stands on this
+                # model. That beats any estimate, so it is recorded before
+                # anything else happens to the key.
+                observed = error.details or {}
+                if daily and "used" in observed and "limit" in observed:
+                    pool.note_daily_limit(
+                        api_key,
+                        model_name,
+                        int(observed["used"]),
+                        int(observed["limit"]),
+                    )
+
                 # A daily exhaustion follows the *model*, not the key, so
                 # rotating keys alone would hit the same wall on every one of
                 # them. Move to the next model in the role's list instead, and
@@ -630,11 +744,15 @@ async def _invoke_rotating(
             parsing_error = None
 
         usage = getattr(raw_message, "usage_metadata", None) or {}
-        record_usage(
-            purpose,
-            int(usage.get("input_tokens") or 0),
-            int(usage.get("output_tokens") or 0),
-        )
+        prompt_tokens = int(usage.get("input_tokens") or 0)
+        completion_tokens = int(usage.get("output_tokens") or 0)
+        record_usage(purpose, prompt_tokens, completion_tokens)
+
+        # Charged to the specific key and model that served the call, which is
+        # what makes a per-key quota estimate possible at all. Skipped for the
+        # local provider: Ollama has no key and no allowance to spend.
+        if provider == "groq":
+            pool.record_tokens(api_key, model_name, prompt_tokens + completion_tokens)
 
         if schema is not None:
             if parsing_error is not None or response is None:

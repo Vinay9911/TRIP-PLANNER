@@ -35,13 +35,48 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Final
 
 from app.core.errors import ConfigurationError
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Groq's daily token allowance, per key, per model.
+#
+# **These are measured, not published in any response.** The binding limit on
+# this project is tokens per *day*, and Groq sends it in no header whatsoever -
+# `x-ratelimit-remaining-tokens` describes only the per-minute window, which is
+# why a key can report "11,959 tokens remaining" while being completely out of
+# daily budget. The only place the daily figure ever appears is the body of the
+# 429 it eventually returns ("Limit 100000, Used 96696"), and by then the key is
+# already spent.
+#
+# So the numbers below are what a run against the live API reported, and they
+# are the basis of an *estimate* rather than a reading. `_KeyState` counts the
+# tokens this process has spent per key per model over a rolling 24 hours and
+# subtracts; the moment a real 429 arrives, `note_daily_limit` replaces the
+# estimate with the figure Groq itself quoted. Anything this process did not
+# spend - another machine, an earlier run, a colleague sharing the key - is
+# invisible to the estimate, so it reads high until ground truth corrects it.
+# That direction is deliberate: an optimistic estimate that gets corrected is
+# less harmful than a pessimistic one that stops you using budget you have.
+DAILY_TOKEN_LIMITS: Final[dict[str, int]] = {
+    "llama-3.3-70b-versatile": 100_000,
+    "openai/gpt-oss-120b": 100_000,
+    "openai/gpt-oss-20b": 100_000,
+    "llama-3.1-8b-instant": 500_000,
+}
+
+#: Applied to a model not in the table above, so a newly-configured model
+#: reports a conservative estimate rather than no estimate at all.
+DEFAULT_DAILY_TOKEN_LIMIT: Final[int] = 100_000
+
+#: The window Groq's daily allowance rolls over. Not a calendar day - nothing
+#: frees up at midnight, so usage is aged out continuously.
+DAILY_WINDOW_SECONDS: Final[float] = 86_400.0
 
 # Applied when a provider reports a rate limit without a `Retry-After` header.
 # Sized for a per-minute window, which is the limit most often hit first.
@@ -70,9 +105,71 @@ class _KeyState:
     total_errors: int = 0
     last_used_at: float = 0.0
 
+    #: Token spend this process has observed, per model, as (when, how many).
+    #: A deque rather than a running total because the allowance rolls over
+    #: continuously: entries older than 24 hours have to leave the count, and
+    #: a scalar cannot forget.
+    spend: dict[str, deque[tuple[float, int]]] = field(default_factory=dict)
+
+    #: Ground truth from a 429 body, per model: (observed_at, used, limit).
+    #: Overrides the estimate, because Groq's own figure accounts for spend
+    #: this process never saw.
+    reported: dict[str, tuple[float, int, int]] = field(default_factory=dict)
+
     def is_available(self, now: float) -> bool:
         """Whether this key may be used at `now`."""
         return now >= self.available_at
+
+    def record_tokens(self, model: str, tokens: int, now: float) -> None:
+        """Add one call's token cost against a model, ageing out old entries.
+
+        Args:
+            model: The model the tokens were spent on. Tracked separately
+                because the daily allowance is per model, not per account -
+                a spent `llama-3.3-70b` bucket says nothing about `gpt-oss`.
+            tokens: Prompt plus completion tokens.
+            now: Monotonic clock reading.
+        """
+        window = self.spend.setdefault(model, deque())
+        window.append((now, tokens))
+        self._prune(window, now)
+
+    def used_today(self, model: str, now: float) -> int:
+        """Tokens spent on a model within the rolling window.
+
+        Prefers Groq's own reported figure when one is recent enough to still
+        describe the same window, since it includes spend this process never
+        saw - another instance, an earlier restart, a shared key.
+        """
+        observed = self.reported.get(model)
+        if observed is not None:
+            seen_at, used, _limit = observed
+            if now - seen_at < DAILY_WINDOW_SECONDS:
+                # The reported figure is a snapshot; anything spent since then
+                # is added on top rather than discarded.
+                window = self.spend.get(model)
+                since = sum(count for at, count in (window or ()) if at > seen_at)
+                return used + since
+
+        window = self.spend.get(model)
+        if not window:
+            return 0
+        self._prune(window, now)
+        return sum(count for _at, count in window)
+
+    def limit_for(self, model: str, now: float) -> int:
+        """The daily allowance for a model - Groq's figure if it ever said."""
+        observed = self.reported.get(model)
+        if observed is not None and now - observed[0] < DAILY_WINDOW_SECONDS:
+            return observed[2]
+        return DAILY_TOKEN_LIMITS.get(model, DEFAULT_DAILY_TOKEN_LIMIT)
+
+    @staticmethod
+    def _prune(window: deque[tuple[float, int]], now: float) -> None:
+        """Drop entries that have aged out of the rolling window."""
+        cutoff = now - DAILY_WINDOW_SECONDS
+        while window and window[0][0] < cutoff:
+            window.popleft()
 
     @property
     def masked(self) -> str:
@@ -285,8 +382,64 @@ class KeyPool:
         with self._lock:
             return sum(1 for state in self._states if state.is_available(now))
 
-    def status(self) -> dict[str, object]:
+    def record_tokens(self, key: str, model: str, tokens: int) -> None:
+        """Charge one call's tokens against the key that served it.
+
+        This is the entire mechanism behind the quota display. Groq will not
+        tell you how much daily budget is left, so the only way to know is to
+        count what you spend - which this process is uniquely placed to do,
+        since every call already passes through one metered code path.
+
+        Args:
+            key: The key that served the call.
+            model: The model it was spent on.
+            tokens: Prompt plus completion tokens. Ignored when zero, which is
+                what a provider that reported no usage looks like.
+        """
+        if tokens <= 0:
+            return
+        now = time.monotonic()
+        with self._lock:
+            state = self._find(key)
+            if state is not None:
+                state.record_tokens(model, tokens, now)
+
+    def note_daily_limit(self, key: str, model: str, used: int, limit: int) -> None:
+        """Record the daily figures Groq quoted in a 429 body.
+
+        Ground truth, and the only ground truth available. It supersedes the
+        local estimate because it accounts for spend this process cannot see:
+        an earlier deployment, a second instance, a key shared with another
+        project.
+
+        Args:
+            key: The key that was refused.
+            model: The model whose bucket is spent.
+            used: Tokens Groq says have been used.
+            limit: The allowance Groq says applies.
+        """
+        now = time.monotonic()
+        with self._lock:
+            state = self._find(key)
+            if state is not None:
+                state.reported[model] = (now, used, limit)
+                masked = state.masked
+
+        logger.info(
+            "keypool.daily_limit_reported",
+            provider=self.provider,
+            key=masked,
+            model=model,
+            used=used,
+            limit=limit,
+        )
+
+    def status(self, *, include_quota: bool = False) -> dict[str, object]:
         """Pool health, for `/health/ready` and the admin dashboard.
+
+        Args:
+            include_quota: Also report the per-key daily token estimate. Off by
+                default so the readiness probe stays a cheap liveness answer.
 
         Returns:
             Counts and per-key statistics. Keys are masked - never returned in
@@ -294,22 +447,66 @@ class KeyPool:
         """
         now = time.monotonic()
         with self._lock:
+            keys = []
+            for state in self._states:
+                entry: dict[str, object] = {
+                    "key": state.masked,
+                    "available": state.is_available(now),
+                    "cooldown_remaining_s": max(round(state.available_at - now, 1), 0.0),
+                    "uses": state.total_uses,
+                    "rate_limits": state.total_rate_limits,
+                    "errors": state.total_errors,
+                }
+                if include_quota:
+                    entry["quota"] = self._quota_for(state, now)
+                keys.append(entry)
+
             return {
                 "provider": self.provider,
                 "total_keys": len(self._states),
                 "available_keys": sum(1 for s in self._states if s.is_available(now)),
-                "keys": [
-                    {
-                        "key": state.masked,
-                        "available": state.is_available(now),
-                        "cooldown_remaining_s": max(round(state.available_at - now, 1), 0.0),
-                        "uses": state.total_uses,
-                        "rate_limits": state.total_rate_limits,
-                        "errors": state.total_errors,
-                    }
-                    for state in self._states
-                ],
+                "keys": keys,
             }
+
+    @staticmethod
+    def _quota_for(state: _KeyState, now: float) -> dict[str, object]:
+        """Render one key's daily budget position. Caller must hold the lock.
+
+        Reported per model as well as in total, because "this key has budget"
+        is not a single fact: the daily allowance is per model, so a key can be
+        finished for the executor's model and perfectly usable for the
+        planner's. A single aggregate number would hide exactly the situation
+        the fallback chain in `models_for_role` exists to handle.
+        """
+        models = sorted(set(state.spend) | set(state.reported))
+        per_model = []
+        used_total = 0
+        limit_total = 0
+
+        for model in models:
+            used = state.used_today(model, now)
+            limit = state.limit_for(model, now)
+            used_total += used
+            limit_total += limit
+            per_model.append(
+                {
+                    "model": model,
+                    "used": used,
+                    "limit": limit,
+                    "remaining": max(limit - used, 0),
+                    # True once Groq has quoted real figures for this model, so
+                    # the interface can distinguish a measurement from a guess
+                    # rather than presenting both with equal confidence.
+                    "measured": model in state.reported,
+                }
+            )
+
+        return {
+            "used": used_total,
+            "limit": limit_total,
+            "remaining": max(limit_total - used_total, 0),
+            "models": per_model,
+        }
 
     def _find(self, key: str) -> _KeyState | None:
         """Look up a key's state. Caller must hold the lock."""
@@ -372,6 +569,26 @@ def get_pool(provider: str, raw_keys: str) -> KeyPool:
             pool = KeyPool(parse_keys(raw_keys), provider=provider)
             _pools[provider] = pool
         return pool
+
+
+def existing_pool(provider: str) -> KeyPool | None:
+    """Return a provider's pool if one has already been built, else None.
+
+    Distinct from `get_pool`, which takes the raw key string and creates the
+    pool on demand. Callers that only want to *report* against an existing pool
+    - the usage callback, the status endpoint - have no key string to offer and
+    no business creating one, and passing a single key in as though it were the
+    configured list would build a pool of one that silently shadows the real
+    seven.
+
+    Args:
+        provider: Short provider name, e.g. `"groq"`.
+
+    Returns:
+        The shared pool, or None if nothing has created it yet.
+    """
+    with _pools_lock:
+        return _pools.get(provider)
 
 
 def reset_pools() -> None:
