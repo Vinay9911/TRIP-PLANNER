@@ -71,7 +71,7 @@ async def test_over_budget_returns_an_instruction_not_an_error() -> None:
 
 @pytest.mark.asyncio
 async def test_identical_calls_are_served_from_the_memo() -> None:
-    """"Lake Placid, NY" with the same dates recurred eight times in the trace.
+    """One city with identical dates recurred eight times in the trace.
 
     A repeat costs nothing and must not consume budget: the question was
     already answered, so charging for it would spend the allowance on nothing
@@ -80,9 +80,15 @@ async def test_identical_calls_are_served_from_the_memo() -> None:
     calls: list[dict[str, Any]] = []
     (tool,) = _budgeted_tools([_counting_tool(calls)], budget=BUDGET)
 
-    for _ in range(8):
+    first = await tool.ainvoke({"city": "Lake Placid, NY", "check_in": "2026-08-08"})
+    assert first == "3 stays in Lake Placid, NY"
+
+    for _ in range(7):
         result = await tool.ainvoke({"city": "Lake Placid, NY", "check_in": "2026-08-08"})
-        assert result == "3 stays in Lake Placid, NY"
+        # The cached payload comes back, so the model still has something to
+        # write findings from, carrying a note telling it not to ask again.
+        assert "3 stays in Lake Placid, NY" in result
+        assert "do not repeat" in result.lower()
 
     assert len(calls) == 1
 
@@ -102,9 +108,7 @@ async def test_budget_is_shared_across_the_whole_toolbox() -> None:
     """
     first: list[dict[str, Any]] = []
     second: list[dict[str, Any]] = []
-    tool_a, tool_b = _budgeted_tools(
-        [_counting_tool(first), _counting_tool(second)], budget=BUDGET
-    )
+    tool_a, tool_b = _budgeted_tools([_counting_tool(first), _counting_tool(second)], budget=BUDGET)
 
     # Distinct names, so the memo cannot merge them.
     object.__setattr__(tool_b, "name", "find_places")

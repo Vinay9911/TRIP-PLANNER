@@ -391,7 +391,26 @@ def _budgeted_tools(tools: list[BaseTool], *, budget: int) -> list[BaseTool]:
         async def run(**kwargs: Any) -> Any:
             nonlocal spent
             key = (base.name, json.dumps(kwargs, sort_keys=True, default=str))
-            
+
+            # The memo is checked BEFORE the budget is charged, and the order
+            # is the whole point. Charging first meant the eight repeats of
+            # "Lake Placid, NY" in the original trace consumed a budget of four
+            # without performing a single lookup - the guard was spending its
+            # allowance on questions it had already answered, which is exactly
+            # the starvation it exists to prevent.
+            if key in memo:
+                logger.info("agent.tool_call_deduped", tool=base.name)
+                # The cached data is returned, not withheld. A bare "you already
+                # ran this" leaves the model with nothing to write its findings
+                # from, and a model with no data retries; the instruction rides
+                # along with the answer instead of replacing it.
+                return (
+                    "[Note: you already ran this exact search - these are the "
+                    "results from the first call. Do not repeat it; use this "
+                    "data or try a different query.]\n"
+                    f"{memo[key]}"
+                )
+
             if spent >= budget:
                 logger.info("agent.tool_budget_spent", tool=base.name, budget=budget)
                 return (
@@ -401,14 +420,6 @@ def _budgeted_tools(tools: list[BaseTool], *, budget: int) -> list[BaseTool]:
                 )
 
             spent += 1
-            
-            if key in memo:
-                logger.info("agent.tool_call_deduped", tool=base.name)
-                return (
-                    "[SYSTEM: You already executed this exact search. The results are "
-                    "already in your memory. Do not repeat this search. Use the data "
-                    "you have or try a completely different approach.]"
-                )
 
             result = await base.ainvoke(kwargs)
             memo[key] = result
@@ -456,7 +467,7 @@ async def _run_step_agent(
         ModelRole,
         UsageRecordingCallback,
         get_llm_pool,
-        get_model,
+        get_model_with_key,
         models_for_role,
     )
 
@@ -495,8 +506,16 @@ async def _run_step_agent(
         if remaining <= 0:
             raise TimeoutError(f"step exceeded {cfg.agent_step_timeout_seconds}s")
 
+        # The key is taken here rather than left inside the factory, because
+        # this step's spend has to be charged back to the key that served it -
+        # and `create_agent` makes its calls out of sight, so the only chance
+        # to associate the two is now, while both are in hand.
+        step_model, step_key = get_model_with_key(
+            ModelRole.EXECUTOR, settings=cfg, model_name=candidates[model_index]
+        )
+
         agent = create_agent(
-            model=get_model(ModelRole.EXECUTOR, settings=cfg, model_name=candidates[model_index]),
+            model=step_model,
             tools=_budgeted_tools(
                 get_tools_for_step(kind, focus=focus),
                 budget=cfg.agent_max_tool_calls_per_step,
@@ -521,7 +540,12 @@ async def _run_step_agent(
                         # handler down into the model calls `create_agent`
                         # makes internally. Without it the executor - the
                         # single largest token consumer here - reports zero.
-                        "callbacks": [UsageRecordingCallback()],
+                        "callbacks": [
+                            UsageRecordingCallback(
+                                api_key=step_key,
+                                model_name=candidates[model_index],
+                            )
+                        ],
                     },
                 ),
                 timeout=remaining,
@@ -533,6 +557,20 @@ async def _run_step_agent(
             if isinstance(exc, TimeoutError):
                 raise
             error = _classify_provider_error(exc)
+
+            # Groq only ever states the daily allowance in the body of the
+            # refusal, so this is the one moment the estimate can be replaced
+            # by a measurement. Recorded even when the step then fails - the
+            # figure is about the key, not about this attempt.
+            observed = error.details or {}
+            if observed.get("scope") == "per_day" and "used" in observed:
+                pool.note_daily_limit(
+                    step_key,
+                    candidates[model_index],
+                    int(observed["used"]),
+                    int(observed["limit"]),
+                )
+
             if isinstance(error, RateLimitError) and attempt < attempts:
                 # A daily exhaustion belongs to the model, not the key, so
                 # every key would hit the same wall. Step to the next model
