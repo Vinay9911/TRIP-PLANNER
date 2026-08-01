@@ -24,6 +24,14 @@ dependencies = [
     "langgraph>=1.2,<2",
     "langchain-groq>=1.0",
     "langgraph-checkpoint-postgres>=3.0",
+    # The local-model fallback (`LLM_PROVIDER=auto|local`). Declared as a hard
+    # dependency rather than an optional extra even though the hosted
+    # deployment never reaches it: `services/llm.py` imports it lazily, so a
+    # missing package produced no error until the moment the cloud quota ran
+    # out - turning the one failure the fallback exists to absorb into an
+    # ImportError instead. It is a thin pure-Python client; the cost of always
+    # shipping it is far below the cost of it being absent exactly when needed.
+    "langchain-ollama>=1.0",
 
     # --- Data / persistence ----------------------------------------------
     "psycopg[binary,pool]>=3.2",
