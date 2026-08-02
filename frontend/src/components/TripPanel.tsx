@@ -233,15 +233,15 @@ function WeatherPanel({
           temp_max_c?: number | null;
           temp_min_c?: number | null;
           conditions?: string | null;
-          precipitation_chance_pct?: number | null;
-        }[];
-        typical_high_c?: number;
-        typical_low_c?: number;
-      }
-    | undefined;
+        location_name?: string;
+      }[];
+      typical_high_c?: number;
+      typical_low_c?: number;
+    }
+  | undefined;
 
-  const days = (data?.days ?? []).slice(0, 4);
-  const state: PanelState = fact ? "ready" : busy ? "loading" : "empty";
+const days = (data?.days ?? []).slice(0, 14);
+const state: PanelState = fact ? "ready" : busy ? "loading" : "empty";
 
   return (
     <Panel
@@ -268,12 +268,17 @@ function WeatherPanel({
       }
     >
       {days.length > 0 ? (
-        <div className="grid grid-cols-4 gap-1.5">
-          {days.map((day) => (
+        <div className="flex gap-1.5 overflow-x-auto pb-2 pr-1 snap-x scroll-smooth">
+          {days.map((day, idx) => (
             <div
-              key={day.date}
-              className="rounded-xl bg-[var(--color-surface-2)] px-1.5 py-2 text-center"
+              key={`${day.date}-${idx}`}
+              className="flex-none w-20 rounded-xl bg-[var(--color-surface-2)] px-1.5 py-2 text-center snap-start"
             >
+              {day.location_name && (
+                <p className="mb-0.5 truncate text-[8px] font-semibold text-[var(--color-ink)]">
+                  {day.location_name}
+                </p>
+              )}
               <p className="text-[9px] uppercase tracking-wide text-[var(--color-ink-faint)]">
                 {new Date(day.date).toLocaleDateString(undefined, { weekday: "short" })}
               </p>

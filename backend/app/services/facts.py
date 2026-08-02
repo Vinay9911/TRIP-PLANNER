@@ -129,6 +129,18 @@ def record_fact(tool: str, source: str, data: Any) -> None:
     if panel is None:
         return
 
+    # Special handling for weather to aggregate multiple cities
+    if panel == "weather" and panel in sheet.by_panel:
+        existing = sheet.by_panel[panel].data
+        if "days" in existing and "days" in data:
+            loc = data.get("location", "")
+            for d in data["days"]:
+                if loc:
+                    d["location_name"] = loc
+            existing["days"].extend(data["days"])
+            # Update the fact with merged data
+            data = existing
+
     sheet.by_panel[panel] = Fact(
         panel=panel,
         tool=tool,

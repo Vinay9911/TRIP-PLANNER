@@ -444,6 +444,7 @@ async def understand_node(
         wants_full_plan=understanding.wants_full_plan,
         scoped_service=effective_scoped_service,
         trip_state=trip_state,
+        focus=state.get("focus"),
     )
 
     # Carry the scoped ask forward only while it is still unresolved; once it

@@ -188,17 +188,15 @@ def decide_mode(
     needs_clarification: bool,
     destination: str | None,
     wants_full_plan: bool,
-    scoped_service: str | None,
+    scoped_service: str,
     trip_state: dict[str, Any],
-) -> AgentMode:
-    """Choose the gear for this turn.
+    focus: list[str] | None = None,
+) -> Literal["plan", "advise", "clarify"]:
+    """Select the gear for the next turn.
 
-    The rules, in the order they apply, each one sentence:
-
-    1. No usable destination -> clarify. Note "no destination", not "the
-       model wants to ask something": once a destination is known this never
-       clarifies, because every question the model reaches for at that point
-       has already been answered or has a workable default.
+    1. The traveller asked a greeting, a pleasantry, or for nothing -> clarify,
+       because the understanding step produced an explicit clarification
+       question for this exact case.
     2. A scoped request (flights, a stay, weather) missing the one slot it
        cannot work without -> clarify, so the agent asks a real question
        instead of running a plan with a blank argument or inventing a
@@ -206,7 +204,8 @@ def decide_mode(
     3. A request for one specific service that has what it needs -> plan,
        because the planner will produce a short scoped plan and asking vibe
        questions about a flight search would be absurd.
-    4. The traveller confirmed an outline or said "just plan it" -> plan,
+    4. The traveller confirmed an outline or said "just plan it" -> plan
+       (unless a critical detail for a requested service is missing),
        and that confirmation sticks for the rest of the conversation so
        follow-up edits ("make day 2 lighter") refine rather than re-advise.
     5. The trip is already specified (duration plus some date signal) -> plan;
@@ -217,9 +216,7 @@ def decide_mode(
     7. Otherwise -> advise.
 
     `scoped_service` should already be resolved through
-    `resolve_scoped_service` before being passed in here, so a follow-up
-    turn that only supplies the missing slot still lands on rule 2 or 3
-    rather than falling through to rule 7.
+    `resolve_scoped_service` before being passed in here.
 
     Args:
         needs_clarification: The understanding step judged the request too
@@ -230,6 +227,7 @@ def decide_mode(
         scoped_service: The resolved scoped service for this turn (see
             `resolve_scoped_service`), or "none".
         trip_state: The merged trip state for this conversation.
+        focus: Services enabled in the composer.
 
     Returns:
         The gear to run this turn in.
@@ -258,6 +256,15 @@ def decide_mode(
         if required_slot and not trip_state.get(required_slot):
             return "clarify"
         return "plan"
+    enabled_services = set(normalise_focus(focus)) if focus else set()
+
+    # If the traveller wants flights but hasn't told us where from, asking
+    # them for the departure city is more useful than generating a full plan
+    # that silently skips flights.
+    if "flights" in enabled_services and not trip_state.get("origin"):
+        # The advisor node will see origin in missing_slots and ask for it.
+        return "advise"
+
     if wants_full_plan or trip_state.get("outline_confirmed"):
         return "plan"
 

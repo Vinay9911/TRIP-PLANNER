@@ -77,6 +77,9 @@ RULES
   one ("Uluwatu" or "Ubud", not "Bali"). If a tool reports the place could \
   not be found, that is a strong sign the name you gave it was too broad; \
   retry once with something more specific rather than the same name again.
+- When calling get_weather_forecast, ALWAYS pass the exact trip dates if \
+  known. If planning for a country or large region, check the weather for \
+  the 2-3 main cities in the itinerary rather than the country itself.
 - Report what you actually found: specific names, places and figures. Your \
   output is the input to the next step, so a vague summary loses the work.
 - Do NOT try to verify exact future dates or specific opening hours for \
