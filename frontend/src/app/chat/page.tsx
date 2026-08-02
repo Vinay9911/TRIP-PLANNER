@@ -663,7 +663,7 @@ function Welcome({
               <img
                 src={capability.image}
                 alt={capability.title}
-                className={`pointer-events-none w-full object-cover rounded-lg opacity-90 transition-transform duration-300 group-hover:scale-[1.03] ${big ? 'mt-2 h-16 sm:h-24' : 'mt-2 h-12 sm:h-16'}`}
+                className={`pointer-events-none w-full object-cover rounded-lg opacity-90 transition-transform duration-300 group-hover:scale-[1.03] ${big ? 'mt-3 h-32 sm:h-48' : 'mt-2 h-16 sm:h-24'}`}
               />
             </button>
           );
