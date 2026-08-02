@@ -24,6 +24,12 @@ from app.services.geocoding import (
 JAIPUR = (26.9124, 75.7873)
 
 
+@pytest.fixture(autouse=True)
+def _mock_settings(monkeypatch: pytest.MonkeyPatch, settings: Any) -> None:
+    monkeypatch.setattr(geocoding, "get_settings", lambda: settings)
+
+
+
 def test_distance_km_matches_known_separation() -> None:
     """Jaipur to Delhi is ~240km; anything wildly off means the maths is wrong."""
     delhi = (28.6139, 77.2090)
