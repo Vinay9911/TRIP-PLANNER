@@ -233,6 +233,7 @@ function WeatherPanel({
           temp_max_c?: number | null;
           temp_min_c?: number | null;
           conditions?: string | null;
+          precipitation_chance_pct?: number | null;
         location_name?: string;
       }[];
       typical_high_c?: number;

@@ -477,9 +477,7 @@ class KeyPool:
             }
 
     @staticmethod
-    def _quota_for(
-        state: _KeyState, now: float, always_include: list[str]
-    ) -> dict[str, object]:
+    def _quota_for(state: _KeyState, now: float, always_include: list[str]) -> dict[str, object]:
         """Render one key's daily budget position. Caller must hold the lock.
 
         Reported per model as well as in total, because "this key has budget"

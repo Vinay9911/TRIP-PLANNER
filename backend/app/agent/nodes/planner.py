@@ -160,7 +160,7 @@ async def planner_node(state: AgentState, *, settings: Settings | None = None) -
             context_lines.append(f"TRAVELLING FROM: {trip_state['origin']}")
     if trip_state.get("duration_days"):
         context_lines.append(f"TRIP LENGTH: {trip_state['duration_days']} days")
-        
+
     context_lines.append(
         "IMPORTANT BUDGET CONSTRAINT: If planning for a whole country or large region, "
         "do NOT plan to search for accommodation in every single city. Limit hotel searches "
